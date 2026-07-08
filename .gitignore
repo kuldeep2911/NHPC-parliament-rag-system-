@@ -1,0 +1,29 @@
+# ── Secrets — NEVER commit API keys or tokens ───────────────────────────
+.env
+.env.*
+*.key
+*.pem
+
+# ── Data — do NOT push document content or the raw source tree ──────────
+# Raw Phase-1 source (parliamentary PDFs/DOCX) and the organized/ output
+# (parsed.json + copied files) contain document content and are large (GBs).
+Original Data/
+PARLIAMENT*/
+organized/
+
+# ── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env/
+
+# ── Editor / OS ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── Claude local settings (may contain machine paths) ───────────────────
+.claude/

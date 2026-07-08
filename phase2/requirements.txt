@@ -1,0 +1,36 @@
+# Phase-2 parsing pipeline — pinned dependencies.
+# Docling is the primary PDF/DOCX + table extractor (bundles rapidocr for OCR
+# and torch for its layout/table models). pdfplumber/python-docx/openpyxl are
+# lightweight fallbacks used when Docling is unavailable or yields nothing.
+
+docling==2.108.0
+docling-core==2.85.0
+pdfplumber==0.11.9
+pypdf==6.11.0
+pypdfium2==5.0.4        # per-page rendering for OCR/VLM routing (Upgrade 3)
+python-docx==1.2.0
+openpyxl==3.1.5
+pandas==2.2.2
+lxml==6.1.1
+
+# Pulled in transitively by docling (listed for reproducibility):
+# torch==2.12.1
+# rapidocr==3.9.1
+# docling-ibm-models   # contains IBM TableFormer (table-structure model, CPU-ok).
+#   Enabled explicitly in reader.py: TableFormerMode ACCURATE + cell matching.
+#   Config: NHPC_TABLEFORMER_MODE=accurate|fast, NHPC_TABLEFORMER_CELL_MATCHING=1.
+
+# Optional — trace layer to Postgres (Upgrade 4). If absent OR no NHPC_TRACE_DSN,
+# the trace degrades to append-only JSONL under organized/_reports/trace/.
+#   psycopg[binary]==3.2.x     (psycopg2 also supported if already present)
+
+# Optional (not required; adapters activate only if present):
+#   paddleocr           # alternative Devanagari OCR engine
+# External tools (optional, for legacy DOC/RTF -> DOCX):
+#   libreoffice / soffice on PATH, or set NHPC_LIBREOFFICE
+
+# Backends (Upgrade 1): NHPC_BACKEND=local (tested) | nvidia (air-gapped stub).
+#   local  -> on-prem OpenAI-compatible server; set NHPC_LLM_BASE_URL + NHPC_LLM_MODEL
+#             (default llama3.2:3b). No base_url -> deterministic no-network LLM.
+#   nvidia -> self-hosted NIM/NeMo; set NVIDIA_BASE_URL (default
+#             http://localhost:8000/v1) + NVIDIA_MODEL. Stub until wired on-site.
