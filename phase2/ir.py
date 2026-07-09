@@ -203,12 +203,16 @@ class SubQuestion:
     """
     part_label: str                       # "a", "b", ... or "(single)"
     question_text: str
-    answer_group_id: str = ""             # -> AnswerGroup.answer_group_id
+    sub_question_id: str = ""             # GLOBALLY unique: "<question_id>_<part>"
+    answer_group_id: str = ""             # -> AnswerGroup.answer_group_id (globally uniq)
     question_language: str = "en"
     annexure_refs: list = field(default_factory=list)
 
     def to_dict(self):
         return {
+            # sub_question_id is the RETRIEVAL UNIT id (Phase 3 embeds question_text
+            # and stores it keyed by this id). Globally unique across the corpus.
+            "sub_question_id": self.sub_question_id,
             "part_label": self.part_label,
             "question_text": self.question_text,
             "question_language": self.question_language,

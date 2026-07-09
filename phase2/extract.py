@@ -228,6 +228,14 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
     # refine reply_format from the actual grouping
     reply_format = _refine_reply_format(reply_format, part_records, groups_raw)
 
+    # --- GLOBALLY-UNIQUE IDs (Phase-3 prep) ----------------------------------
+    # Prefix every id with the folder question_id so ids are unique across the whole
+    # corpus and DETERMINISTIC (same input -> same id on re-run). part_label is NOT
+    # unique on its own; the local group ids ("g1") are only locally unique.
+    qid = str(meta.get("question_id", "") or "q").strip()
+    # local group id ("g1") -> global ("<qid>_g1")
+    gid_map = {g["answer_group_id"]: f"{qid}_{g['answer_group_id']}" for g in groups_raw}
+
     # --- build sub_questions (lean, pointer to group) ------------------------
     sub_questions, annexures_all = [], []
     qtext_by_part = {r["part_label"]: r["question_text"] for r in part_records}
@@ -237,9 +245,10 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
         refs = _dedup(refs)
         annexures_all += [r for r in refs if r not in annexures_all]
         sub_questions.append(SubQuestion(
+            sub_question_id=f"{qid}_{part}",              # globally unique, e.g. 4570_a
             part_label=part,
             question_text=rec["question_text"],
-            answer_group_id=part_to_group[part],
+            answer_group_id=gid_map[part_to_group[part]],  # globally-unique pointer
             question_language=detect_language(rec["question_text"]),
             annexure_refs=refs,
         ))
@@ -257,7 +266,7 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
         grp_refs = _dedup(grp_refs)
         annexures_all += [r for r in grp_refs if r not in annexures_all]
         answer_groups.append(AnswerGroup(
-            answer_group_id=g["answer_group_id"],
+            answer_group_id=gid_map[g["answer_group_id"]],   # globally unique
             answers_parts=g["answers_parts"],
             answer_text=atext,
             answer_type=atype,
@@ -271,6 +280,15 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
     # --- attach tables INSIDE their answer group -----------------------------
     diary_level_tables = _attach_tables_to_groups(
         all_tables, answer_groups, part_records, part_to_group, out_flags)
+
+    # Change 3: re-key table_id/row_id so they are group-prefixed and globally
+    # unique: "<qid>_<group>_t<n>" and "..._r<m>". A table lives in exactly one
+    # group, so numbering per group is stable and deterministic.
+    for g in answer_groups:
+        for ti, t in enumerate(g.tables, start=1):
+            _rekey_table(t, f"{g.answer_group_id}_t{ti}")
+    for ti, t in enumerate(diary_level_tables, start=1):
+        _rekey_table(t, f"{qid}_dl_t{ti}")
 
     starred = _detect_starred(text)
     subject = _detect_subject(text)
@@ -298,10 +316,18 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
                 "ref_label": lab, "referenced_in_parts": refs_by_part.get(lab, []),
                 "file_path": None, "file_present": False, "match_confidence": "none"})
 
-    # --- safeguards: cross-consistency of sub_questions <-> answer_groups ----
+    # --- Change 5: validate the retrieval -> display link chain resolves from
+    # each sub_question_id (pointer to a real group; the display payload — answer
+    # file + annexures — is doc-level and always reachable). Flags group_link_broken.
     _validate_group_links(sub_questions, answer_groups, out_flags)
+    _validate_display_chain(sub_questions, annexures, out_flags)
 
     fields = {
+        # Change 4: the RETRIEVAL/embedding unit for Phase 3 is the sub-question's
+        # question text. Answers/tables/annexures are DISPLAY PAYLOAD, not search
+        # targets. Phase 3 embeds sub_questions[].question_text keyed by
+        # sub_question_id and, on a hit, fetches this document's answer + file paths.
+        "embedding_unit": "sub_question.question_text",
         "answer_file_path": answer_file_path,
         "diary_numbers": dnums,
         "starred": starred,
@@ -316,6 +342,22 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
         "annexure_content_present": any(a["file_present"] for a in annexures) if annexures else False,
     }
     return fields, _dedup(out_flags)
+
+
+def _validate_display_chain(sub_questions, annexures, out_flags):
+    """
+    Change 5: confirm each sub_question can reach its display payload. The answer
+    link (sub_question.answer_group_id -> answer_group) is checked by
+    _validate_group_links. Here we check that any annexure a sub-part cites resolves
+    to an entry in the document annexures[] (so the annexure button has a target).
+    """
+    annex_labels = {a["ref_label"] for a in annexures}
+    for sq in sub_questions:
+        for ref in sq.annexure_refs:
+            if ref not in annex_labels:
+                if "annexure_ref_unresolved" not in out_flags:
+                    out_flags.append("annexure_ref_unresolved")
+                return
 
 
 def _refine_reply_format(reply_format, part_records, groups_raw):
@@ -395,6 +437,16 @@ def _attach_tables_to_groups(all_tables, answer_groups, part_records,
     if "table_group_uncertain" not in out_flags:
         out_flags.append("table_group_uncertain")
     return []
+
+
+def _rekey_table(table, new_table_id):
+    """
+    Set a globally-unique table_id and re-derive each row_id from it. Deterministic:
+    same table -> same id. Only touches the ID strings, not the table data.
+    """
+    table.table_id = new_table_id
+    for ri, row in enumerate(table.rows, start=1):
+        row.row_id = f"{new_table_id}_r{ri}"
 
 
 def _mark_answer_is_table(group):

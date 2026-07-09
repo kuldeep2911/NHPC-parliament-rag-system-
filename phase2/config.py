@@ -75,6 +75,10 @@ class Config:
     groq_base_url: str = field(default_factory=lambda: _env_str("GROQ_BASE_URL", "https://api.groq.com/openai/v1"))
     groq_model: str = field(default_factory=lambda: _env_str("GROQ_MODEL", "llama-3.3-70b-versatile"))
     groq_api_key_env: str = field(default_factory=lambda: _env_str("GROQ_API_KEY_ENV", "GROQ_API_KEY"))
+    # Client-side rate limit so we never hit Groq's 429 (default free tier is
+    # 30 req/min). The GroqLLM provider paces calls to stay under this, so EVERY
+    # file is parsed by the LLM instead of falling back to deterministic on 429.
+    groq_rpm: int = field(default_factory=lambda: int(_env_str("GROQ_RPM", "30")))
 
     # --- LOCAL provider settings (OpenAI-compatible on-prem server) -------
     # Local Ollama LLM model name — a SINGLE config value, never hardcoded in logic.

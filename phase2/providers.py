@@ -154,10 +154,15 @@ class GroqLLM:
     kind = "groq"
     llm_is_deterministic = False
 
+    # Process-wide request timestamps (shared across instances) so the rate limit
+    # is enforced globally, not per-object. A simple sliding-window limiter.
+    _call_times = []
+
     def __init__(self, cfg):
         self.cfg = cfg
         self.model = cfg.groq_model
         self.base_url = cfg.groq_base_url
+        self.rpm = max(1, int(getattr(cfg, "groq_rpm", 30)))
         self.name = f"groq:{self.model}"
 
     def model_for(self, op: str) -> str:
@@ -170,6 +175,24 @@ class GroqLLM:
                 f"llm_backend=groq needs an API key in env ${self.cfg.groq_api_key_env}")
         return k
 
+    def _throttle(self):
+        """
+        Block until sending a request keeps us at/under groq_rpm in the last 60s.
+        This CLIENT-SIDE pacing means we never hit Groq's 429, so every file is
+        parsed by the LLM instead of falling back to deterministic.
+        """
+        import time
+        while True:
+            now = time.time()
+            # drop timestamps older than 60s
+            GroqLLM._call_times[:] = [t for t in GroqLLM._call_times if now - t < 60.0]
+            if len(GroqLLM._call_times) < self.rpm:
+                GroqLLM._call_times.append(now)
+                return
+            # wait until the oldest call ages out of the 60s window (+ small margin)
+            wait = 60.0 - (now - GroqLLM._call_times[0]) + 0.25
+            time.sleep(max(0.1, wait))
+
     def complete_json(self, system: str, user: str, schema_hint=None) -> dict:
         body = {
             "model": self.model,
@@ -178,28 +201,36 @@ class GroqLLM:
             "temperature": 0, "stream": False,
             "response_format": {"type": "json_object"},  # OpenAI-style JSON mode
         }
-        req = urllib.request.Request(
-            self.base_url.rstrip("/") + "/chat/completions",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json",
-                     "Authorization": f"Bearer {self._key()}",
-                     # Cloudflare fronts api.groq.com and blocks the default
-                     # python-urllib User-Agent with 403 (error 1010); send a real UA.
-                     "User-Agent": "NHPC-parliament-rag/1.0"})
         import time
-        for attempt in range(3):
+        # Retry generously; a 429 WAITS (honoring Retry-After) and retries rather
+        # than giving up — so a rate hit never causes a file to skip the LLM.
+        for attempt in range(8):
+            self._throttle()   # pace to stay under groq_rpm BEFORE each attempt
+            req = urllib.request.Request(
+                self.base_url.rstrip("/") + "/chat/completions",
+                data=json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {self._key()}",
+                         # Cloudflare blocks the default python-urllib UA (403/1010).
+                         "User-Agent": "NHPC-parliament-rag/1.0"})
             try:
                 with urllib.request.urlopen(req, timeout=self.cfg.llm_timeout_s) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                 return extract_json(data["choices"][0]["message"]["content"])
             except urllib.error.HTTPError as e:
-                if e.code in (429, 500, 502, 503) and attempt < 2:
+                if e.code == 429:
+                    ra = e.headers.get("Retry-After") if e.headers else None
+                    delay = float(ra) if (ra and ra.replace(".", "").isdigit()) else 5.0
+                    time.sleep(min(delay + 0.5, 65))
+                    continue
+                if e.code in (500, 502, 503) and attempt < 7:
                     time.sleep(2 * (attempt + 1)); continue
                 raise BackendError(f"Groq request failed: HTTP {e.code}")
             except urllib.error.URLError as e:
-                if attempt < 2:
+                if attempt < 7:
                     time.sleep(2 * (attempt + 1)); continue
                 raise BackendError(f"Groq request failed: {e}")
+        raise BackendError("Groq request failed after retries (rate limit)")
 
 
 class DeterministicLLMProvider:

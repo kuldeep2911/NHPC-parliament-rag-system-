@@ -30,11 +30,71 @@ from .providers import get_parser, get_llm
 from .trace import RunTracer, new_run_id
 
 
+SCHEMA_VERSION = "2.1"   # bump when parsed.json schema changes (for DB migrations)
+
+
 def _utf8_stdout():
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+
+
+def _now_iso():
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _file_metadata(path, root, meta):
+    """
+    File + provenance metadata for DB storage. Captures the reply file's on-disk
+    facts (mtime, size, sha256, ext, page count) plus the Phase-1 source path and
+    selection provenance. All paths RELATIVE to organized/ root. None if no file.
+    """
+    import datetime
+    md = {
+        "relative_path": None,
+        "original_filename": meta.get("answer_file_selected"),
+        "phase1_source_path": meta.get("source_path"),
+        "answer_file_selection_reason": meta.get("answer_file_selection_reason"),
+        "extension": None,
+        "size_bytes": None,
+        "last_modified": None,
+        "sha256": None,
+        "page_count": None,
+    }
+    if not path or not os.path.isfile(path):
+        return md
+    try:
+        st = os.stat(path)
+        md["relative_path"] = os.path.relpath(path, root).replace(os.sep, "/")
+        md["extension"] = os.path.splitext(path)[1].lower().lstrip(".")
+        md["size_bytes"] = st.st_size
+        md["last_modified"] = datetime.datetime.fromtimestamp(
+            st.st_mtime, datetime.timezone.utc).isoformat()
+    except OSError:
+        return md
+    # sha256 (stream, so large files don't blow memory)
+    try:
+        import hashlib
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        md["sha256"] = h.hexdigest()
+    except OSError:
+        pass
+    # page count for PDFs (cheap, best-effort)
+    if md["extension"] == "pdf":
+        try:
+            import pdfplumber
+            import warnings
+            warnings.filterwarnings("ignore")
+            with pdfplumber.open(path) as pdf:
+                md["page_count"] = len(pdf.pages)
+        except Exception:
+            pass
+    return md
 
 
 def find_question_dirs(root):
@@ -110,6 +170,10 @@ def parse_one(qdir, root, cfg, parser, llm, run_tracer=None):
         "house": meta.get("house"),
         "state": meta.get("state"),
         "source_answer_file": os.path.basename(ans_path) if ans_path else None,
+        # File + processing metadata for DB storage (mtime, size, hash, ext, etc.).
+        "file_metadata": _file_metadata(ans_path, root, meta),
+        "parsed_at": _now_iso(),
+        "parsed_schema_version": SCHEMA_VERSION,
         "run_id": run_id,
         "backend": backend_label,
         "models_used": {},
@@ -119,6 +183,7 @@ def parse_one(qdir, root, cfg, parser, llm, run_tracer=None):
         "layout_case_detected": None,
         "qa_table": False,
         "page_routing": [],
+        "embedding_unit": "sub_question.question_text",
         "answer_file_path": None,
         "diary_numbers": [],
         "starred": None,
@@ -209,7 +274,7 @@ def parse_one(qdir, root, cfg, parser, llm, run_tracer=None):
         "no_diary_number_found", "annexure_match_ambiguous",
         # answer_groups safeguards
         "table_group_uncertain", "qa_count_mismatch", "group_link_broken",
-        "llm_crosscheck_disagree",
+        "llm_crosscheck_disagree", "annexure_ref_unresolved",
     }
     flags = _dedup(flags)
     needs_review = bool(set(flags) & review_triggers) or bool(verrs)
