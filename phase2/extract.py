@@ -1323,9 +1323,14 @@ def _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer=None):
         "gets that content, not the generic line.\n"
         "- A bare 'May be replied by MoP/CEA.' with no NHPC specifics applies only to "
         "questions that have no dedicated substantive block. NEVER invent questions.\n"
-        "Schema: {\"pairs\":[{\"question_number\":str,\"question_text\":"
-        "str,\"answer_text\":str,\"question_language\":\"en|hi\",\"answer_language\""
-        ":\"en|hi\",\"answer_is_table\":bool,\"related_question_numbers\":[str],"
+        "OUTPUT answer_block_index: for each question, give the 0-based INDEX into "
+        "answer_blocks of the block that answers it (the whole block, never part of "
+        "one). Two questions that SHARE a block get the SAME index. This is how you "
+        "express sharing — do not paste block text yourself. If truly no block "
+        "answers a question, use -1.\n"
+        "Schema: {\"pairs\":[{\"question_number\":str,\"question_text\":str,"
+        "\"answer_block_index\":int,\"question_language\":\"en|hi\","
+        "\"answer_is_table\":bool,\"related_question_numbers\":[str],"
         "\"confidence\":\"high|low\"}]}\n"
         # --- SHAPE-ONLY example using <PLACEHOLDER> tokens (NOT real text); shows
         # the JSON structure only. The model must copy answer_text verbatim from
@@ -1344,24 +1349,36 @@ def _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer=None):
         "\"related_question_numbers\":[\"<NUM>\"],\"confidence\":\"high\"}]}"
     )
     reply_text = doc.full_text()
-    # Concrete structural hints so the model doesn't have to guess the counts:
-    #  - n_answer_markers: how many Comment:/Answer:/Reply: blocks exist = #answers.
-    #  - question_block: the text BEFORE the first answer marker = where the
-    #    questions live (so the model never mines questions from answer content).
+    # PRE-SEGMENT the answer blocks so the LLM never has to guess answer boundaries
+    # (it was splitting one Comment: block into two, e.g. 3213 d/e). We hand it:
+    #  - question_block: text BEFORE the first Comment: (the questions live here).
+    #  - answer_blocks:  the verbatim text of each Comment:->next-Comment: block.
+    # The LLM's job is only to ASSIGN whole blocks to questions (and mark sharing),
+    # NOT to segment. An answer_text MUST be exactly one of these blocks (or, when a
+    # block is shared, the same block repeated on each covered question).
     m_head = re.search(r"is\s+as\s+below\s*:?\s*", reply_text, re.I)
     after_head = reply_text[m_head.end():] if m_head else reply_text
-    first_ans = _COMMENT_MARKER.search(after_head)
-    question_block = (after_head[:first_ans.start()] if first_ans else after_head).strip()
-    n_answer_markers = len(_COMMENT_MARKER.findall(reply_text))
+    marks = list(_COMMENT_MARKER.finditer(after_head))
+    question_block = (after_head[:marks[0].start()] if marks else after_head).strip()
+    answer_blocks = []
+    for i, mk in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(after_head)
+        blk = re.sub(r"\s+", " ", after_head[mk.end():end]).strip()
+        if blk:
+            answer_blocks.append(blk)
     ir_payload = {
         "reply_text": reply_text[:12000],
         "question_block": question_block[:4000],
-        "n_answer_markers": n_answer_markers,
+        "answer_blocks": answer_blocks,
+        "n_answer_blocks": len(answer_blocks),
         "instructions": (
-            "The questions are in question_block. There are exactly n_answer_markers "
-            "answer blocks in reply_text (each starts at Comment:/Answer:/Reply:). "
-            "Do NOT create more questions than are in question_block, and do NOT treat "
-            "(A)/(B)/(i)/(ii) headings inside an answer as questions."),
+            "Questions are in question_block (do NOT create questions from (A)/(i) "
+            "headings that appear inside an answer). answer_blocks is the list of the "
+            "actual answer texts, ALREADY SEGMENTED — do NOT split or merge them. "
+            "Each pair's answer_text MUST be exactly ONE entry from answer_blocks, "
+            "copied verbatim. When one answer_block covers several questions, put that "
+            "SAME block (identical text) on each of those questions so they share it. "
+            "Match each block to the question it addresses by subject."),
         "metadata_question_id": meta.get("question_id"),
         "n_tables": len(doc.tables),
         "answer_table_ids": [t.table_id for (t, isans) in table_objs if isans],
@@ -1375,6 +1392,11 @@ def _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer=None):
         try:
             obj = backend.complete_json(system, user, schema_hint="pairs")
             raw_out = obj  # provider returns parsed dict; keep it as the raw record
+            # Resolve answer_block_index -> exact block text FIRST (the LLM returns an
+            # index, not answer_text). This MUST run before validate_pairs, or valid
+            # output is wrongly failed for "missing answer_text" and retried — the
+            # retry can return a WORSE result (e.g. 3213 lost question e on retry).
+            _resolve_answer_blocks(obj, answer_blocks)
             errs = validate_pairs(obj)
             dt = int((time.time() - t0) * 1000)
             if tracer:
@@ -1411,6 +1433,29 @@ def _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer=None):
 _FEWSHOT_LEAK = re.compile(
     r"achieved its targets|generation increased|DO letter is sent monthly|"
     r"attention is drawn to DISCOM dues|abnormal increase", re.I)
+
+
+def _resolve_answer_blocks(obj, answer_blocks):
+    """
+    Fill each pair's answer_text from answer_blocks[answer_block_index], so a shared
+    block yields IDENTICAL answer_text across the questions that point to it (they
+    then group) and a block is never split or merged. If the model already supplied
+    answer_text (older field / no index), that is kept.
+    """
+    if not answer_blocks:
+        return
+    for p in obj.get("pairs", []):
+        if (p.get("answer_text") or "").strip():
+            continue  # model provided text directly -> leave it (grounding checks it)
+        idx = p.get("answer_block_index")
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            idx = -1
+        if 0 <= idx < len(answer_blocks):
+            p["answer_text"] = answer_blocks[idx]
+        else:
+            p["answer_text"] = ""   # -1 / out of range -> genuinely no answer block
 
 
 def _answers_grounded(obj, reply_text, min_overlap=0.5):
