@@ -687,20 +687,22 @@ def _extract_prose(doc, layout, qid, meta, cfg, backend, tracer=None):
             tables_index.append(tout.table_id)
             flags += tflags
 
-    # LLM-PRIMARY grouping (cfg.llm_grouping, for a capable model e.g. groq 70B):
-    # the model decides which parts share which answer — better on semantically
-    # ambiguous mappings than rules. Deterministic is the fallback/validator. The
-    # grounding guard in _model_prose rejects hallucinated output -> deterministic.
+    # LLM-PRIMARY grouping (cfg.llm_grouping with a capable model, e.g. groq 70B):
+    # TRUST THE LLM. The prompt now gives it the question_block + n_answer_markers so
+    # it counts questions/answers correctly and never mines a question from '(A)/(i)'
+    # headings inside an answer. We do NOT police it with the deterministic count
+    # (that caused a false conflict when deterministic was itself wrong). The only
+    # guard is grounding: _model_prose rejects output whose answers are not present
+    # in the source (invented text) and falls back to deterministic in that case.
+    subparts = _split_subparts(text, meta)
     if getattr(cfg, "llm_grouping", False) and _is_real_model(backend):
         result = _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer)
         if result is not None:
             r_pairs, r_index, r_flags = result
             return r_pairs, r_index, flags + r_flags + ["llm_grouping"]
-        # model failed/ungrounded -> fall through to deterministic
+        # only if the model failed / produced ungrounded output -> deterministic
 
-    # DETERMINISTIC: explicit (a)/(b)/(c) sub-parts (reliable for the NHPC format;
-    # default path, and the fallback when the LLM is unavailable/ungrounded).
-    subparts = _split_subparts(text, meta)
+    # DETERMINISTIC (default path / fallback when LLM unavailable or ungrounded).
     if subparts:
         pairs = _deterministic_prose(text, layout, meta, table_objs, flags)
         if tracer:
@@ -728,6 +730,7 @@ def _extract_prose(doc, layout, qid, meta, cfg, backend, tracer=None):
             "note": "deterministic prose pairing (no model call)"},
             model_name="deterministic", duration_ms=None)
     return pairs, tables_index, flags
+
 
 
 def _is_answer_table(raw, prose_text):
@@ -1290,21 +1293,36 @@ def _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer=None):
         "(clubbed), emit them in related_question_numbers. If you cannot find a "
         "diary number in the text, use \"" + meta_qid + "\" as the question_number. "
         "Never put question TEXT inside question_number.\n"
-        "CRITICAL about answer_text: each sub-question (a)/(b)/(c) is followed in "
-        "the text by ITS answer, usually introduced by 'Comment:', 'Comments:', "
-        "'Answer:' or 'Reply:'. You MUST copy that answer text into answer_text for "
-        "that pair. NEVER leave answer_text empty when a Comment/Answer/Reply "
-        "follows the question. If two questions share one combined answer, repeat "
-        "that answer text in both pairs. Copy answers verbatim; do not summarize.\n"
-        "This document is ONE parliamentary diary number with sub-parts labelled "
-        "a, b, c, etc. Extract EACH sub-part as its own pair with its matching "
-        "answer. Preserve the internal headed structure of long answers.\n"
-        "GROUPING: some answers cover SEVERAL sub-parts. When one answer addresses "
-        "multiple parts, put the SAME answer_text on each of those parts (identical "
-        "text, verbatim) so they are recognised as one shared answer — do NOT write "
-        "a different paraphrase per part. If questions are all listed first and the "
-        "answers follow, map answers to questions in order. If you cannot tell which "
-        "answer covers which part, set confidence 'low' rather than guessing.\n"
+        "HOW TO FIND THE QUESTIONS (critical):\n"
+        "- The questions come FIRST, after 'is as below:'. They may or may not have "
+        "  (a)/(b)/(c) labels. If there are NO letter labels, each QUESTION is one "
+        "  sentence/clause in that opening block (they usually start with 'Whether', "
+        "  'The details', 'The number', 'The steps', 'If so').\n"
+        "- The answers come AFTER, each introduced by 'Comment:'/'Comments:'/'Answer:'"
+        "/'Reply:'. The NUMBER OF ANSWERS equals the number of Comment:/Answer: "
+        "markers.\n"
+        "- CRITICAL: markers like '(A)', '(B)', '(i)', '(ii)', '(a) Natural Hurdles' "
+        "  that appear INSIDE an answer block (after a Comment:) are CONTENT HEADINGS "
+        "  of that answer, NOT new questions. NEVER create a question from text that "
+        "  sits inside an answer. The question count comes ONLY from the opening "
+        "  question block, never from headings inside answers.\n"
+        "answer_text: copy each answer VERBATIM from its Comment:/Answer: block; do "
+        "not summarize; never leave it empty when a Comment follows.\n"
+        "GROUPING (use EVERY answer block; match by MEANING — the key task):\n"
+        "- There are n_answer_markers answer blocks (each begins at Comment:/Answer:)."
+        " You MUST use the content of EVERY block — never discard a substantive "
+        "answer. Read all blocks in order; concatenate consecutive blocks that form "
+        "one answer.\n"
+        "- Assign each answer to the question whose SUBJECT it addresses. Example: an "
+        "answer 'NHPC is implementing 2000MW Subansiri...' belongs to the question "
+        "asking the status of Subansiri, not to unrelated questions.\n"
+        "- Two questions SHARE an answer ONLY when the same answer text genuinely "
+        "addresses both (then put identical answer_text on both). Do NOT collapse a "
+        "question's OWN substantive answer into a generic 'May be replied by MoP' "
+        "bucket — if a block has NHPC-specific content for a question, that question "
+        "gets that content, not the generic line.\n"
+        "- A bare 'May be replied by MoP/CEA.' with no NHPC specifics applies only to "
+        "questions that have no dedicated substantive block. NEVER invent questions.\n"
         "Schema: {\"pairs\":[{\"question_number\":str,\"question_text\":"
         "str,\"answer_text\":str,\"question_language\":\"en|hi\",\"answer_language\""
         ":\"en|hi\",\"answer_is_table\":bool,\"related_question_numbers\":[str],"
@@ -1326,10 +1344,24 @@ def _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer=None):
         "\"related_question_numbers\":[\"<NUM>\"],\"confidence\":\"high\"}]}"
     )
     reply_text = doc.full_text()
+    # Concrete structural hints so the model doesn't have to guess the counts:
+    #  - n_answer_markers: how many Comment:/Answer:/Reply: blocks exist = #answers.
+    #  - question_block: the text BEFORE the first answer marker = where the
+    #    questions live (so the model never mines questions from answer content).
+    m_head = re.search(r"is\s+as\s+below\s*:?\s*", reply_text, re.I)
+    after_head = reply_text[m_head.end():] if m_head else reply_text
+    first_ans = _COMMENT_MARKER.search(after_head)
+    question_block = (after_head[:first_ans.start()] if first_ans else after_head).strip()
+    n_answer_markers = len(_COMMENT_MARKER.findall(reply_text))
     ir_payload = {
         "reply_text": reply_text[:12000],
-        "instructions": ("Extract every question and its answer from reply_text. "
-                         "Answers follow their question after Comment:/Answer:/Reply:."),
+        "question_block": question_block[:4000],
+        "n_answer_markers": n_answer_markers,
+        "instructions": (
+            "The questions are in question_block. There are exactly n_answer_markers "
+            "answer blocks in reply_text (each starts at Comment:/Answer:/Reply:). "
+            "Do NOT create more questions than are in question_block, and do NOT treat "
+            "(A)/(B)/(i)/(ii) headings inside an answer as questions."),
         "metadata_question_id": meta.get("question_id"),
         "n_tables": len(doc.tables),
         "answer_table_ids": [t.table_id for (t, isans) in table_objs if isans],
@@ -1431,7 +1463,11 @@ def _pairs_from_model(obj, table_objs, meta=None, reply_text=""):
             answer_language=p.get("answer_language") or detect_language(p.get("answer_text", "")),
             answer_is_table=bool(p.get("answer_is_table")),
             related_question_numbers=rel,
-            tables=ans_tabs if p.get("answer_is_table") else all_tabs,
+            # Attach tables. Use answer-role tables only when the LLM says the answer
+            # IS a table AND such tables exist; otherwise attach ALL tables so a
+            # detected table is NEVER dropped (fix 24: LLM said answer_is_table but
+            # the classifier found only a 'supporting' table -> ans_tabs was empty).
+            tables=ans_tabs if (p.get("answer_is_table") and ans_tabs) else all_tabs,
             confidence=p.get("confidence", "high"),
         ))
 
