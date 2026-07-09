@@ -142,6 +142,66 @@ class OllamaLLM:
         return extract_json(data["choices"][0]["message"]["content"])
 
 
+class GroqLLM:
+    """
+    Cloud LLM via Groq's OpenAI-compatible API (llama-3.3-70b for the build phase).
+    A 70B model groups multi-part Q&A far more reliably than the local 3B. Key from
+    env only (cfg.groq_api_key_env). At deployment, switch llm_backend to a local/
+    on-prem GPU running the same model — no downstream change.
+
+    ⚠️ Build-phase only: document text is sent to Groq's cloud. Not for real NHPC data.
+    """
+    kind = "groq"
+    llm_is_deterministic = False
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.model = cfg.groq_model
+        self.base_url = cfg.groq_base_url
+        self.name = f"groq:{self.model}"
+
+    def model_for(self, op: str) -> str:
+        return self.model if op == "llm" else "unknown"
+
+    def _key(self):
+        k = self.cfg.groq_api_key()
+        if not k:
+            raise BackendError(
+                f"llm_backend=groq needs an API key in env ${self.cfg.groq_api_key_env}")
+        return k
+
+    def complete_json(self, system: str, user: str, schema_hint=None) -> dict:
+        body = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "temperature": 0, "stream": False,
+            "response_format": {"type": "json_object"},  # OpenAI-style JSON mode
+        }
+        req = urllib.request.Request(
+            self.base_url.rstrip("/") + "/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {self._key()}",
+                     # Cloudflare fronts api.groq.com and blocks the default
+                     # python-urllib User-Agent with 403 (error 1010); send a real UA.
+                     "User-Agent": "NHPC-parliament-rag/1.0"})
+        import time
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=self.cfg.llm_timeout_s) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                return extract_json(data["choices"][0]["message"]["content"])
+            except urllib.error.HTTPError as e:
+                if e.code in (429, 500, 502, 503) and attempt < 2:
+                    time.sleep(2 * (attempt + 1)); continue
+                raise BackendError(f"Groq request failed: HTTP {e.code}")
+            except urllib.error.URLError as e:
+                if attempt < 2:
+                    time.sleep(2 * (attempt + 1)); continue
+                raise BackendError(f"Groq request failed: {e}")
+
+
 class DeterministicLLMProvider:
     """Wrapper so a deterministic LLM backend has the same shape as OllamaLLM."""
     kind = "deterministic"
@@ -462,6 +522,8 @@ def get_parser(cfg):
 def get_llm(cfg):
     """LLM provider for the extraction pass, independent of the parser backend."""
     _, lb = cfg.resolve_backends()
+    if lb == "groq":
+        return GroqLLM(cfg)
     if lb == "ollama":
         return OllamaLLM(cfg)
     if lb == "deterministic":

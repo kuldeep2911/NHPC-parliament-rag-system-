@@ -420,12 +420,15 @@ def main(argv=None):
                     help="legacy single switch (overrides NHPC_BACKEND env)")
     ap.add_argument("--parser-backend", default=None, choices=[None, "nemotron", "docling"],
                     help="document parser backend (overrides NHPC_PARSER_BACKEND)")
-    ap.add_argument("--llm-backend", default=None, choices=[None, "ollama", "deterministic"],
+    ap.add_argument("--llm-backend", default=None,
+                    choices=[None, "ollama", "groq", "deterministic"],
                     help="LLM extraction backend (overrides NHPC_LLM_BACKEND)")
     ap.add_argument("--no-docling", action="store_true", help="disable Docling (use fallbacks)")
     ap.add_argument("--no-trace", action="store_true", help="disable the trace layer")
     ap.add_argument("--llm-crosscheck", action="store_true",
                     help="run the LLM as a second-opinion check on every prose file")
+    ap.add_argument("--llm-grouping", action="store_true",
+                    help="LLM decides question<->answer grouping (best with a 70B model)")
     args = ap.parse_args(argv)
 
     cfg = load_config(
@@ -435,6 +438,7 @@ def main(argv=None):
         prefer_docling=False if args.no_docling else None,
         trace_enabled=False if args.no_trace else None,
         llm_crosscheck=True if args.llm_crosscheck else None,
+        llm_grouping=True if args.llm_grouping else None,
     )
     run(cfg, only=args.only)
     return 0

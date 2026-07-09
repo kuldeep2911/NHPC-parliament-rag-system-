@@ -63,10 +63,18 @@ class Config:
 
     # Independent backend selection (spec: Nemotron parse + Ollama LLM together):
     #   parser_backend : "nemotron" (hosted/on-prem NIMs) | "docling" (CPU fallback)
-    #   llm_backend    : "ollama" (local llama3.2:3b) | "deterministic" (no-network)
-    # Empty -> derived from `backend` for backward-compat (see __post_init__).
+    #   llm_backend    : "ollama" (local) | "groq" (cloud 70B, build phase) |
+    #                    "deterministic" (no-network)
+    # Empty -> derived from `backend` for backward-compat.
     parser_backend: str = field(default_factory=lambda: _env_str("NHPC_PARSER_BACKEND", ""))
     llm_backend: str = field(default_factory=lambda: _env_str("NHPC_LLM_BACKEND", ""))
+
+    # --- GROQ (OpenAI-compatible cloud LLM; llama3.3-70b for the build phase) -----
+    # Build-phase only (data leaves the network); at deployment switch llm_backend
+    # to a local/on-prem GPU running the same 70B. Key from env ONLY.
+    groq_base_url: str = field(default_factory=lambda: _env_str("GROQ_BASE_URL", "https://api.groq.com/openai/v1"))
+    groq_model: str = field(default_factory=lambda: _env_str("GROQ_MODEL", "llama-3.3-70b-versatile"))
+    groq_api_key_env: str = field(default_factory=lambda: _env_str("GROQ_API_KEY_ENV", "GROQ_API_KEY"))
 
     # --- LOCAL provider settings (OpenAI-compatible on-prem server) -------
     # Local Ollama LLM model name — a SINGLE config value, never hardcoded in logic.
@@ -87,6 +95,9 @@ class Config:
     # questions + distinct answers and we flag llm_crosscheck_disagree if it differs
     # from the deterministic split. The deterministic result is kept either way.
     llm_crosscheck: bool = field(default_factory=lambda: _env_bool("NHPC_LLM_CROSSCHECK", False))
+    # LLM decides the question<->answer GROUPING as primary (best with a capable
+    # model like groq llama-3.3-70b); deterministic splitter is the fallback.
+    llm_grouping: bool = field(default_factory=lambda: _env_bool("NHPC_LLM_GROUPING", False))
 
     # --- NVIDIA NeMo Retriever (OCR + page-elements + table-structure) ----
     # Two deployment modes, switched by NVIDIA_MODE (default "cloud" for the build
@@ -145,6 +156,10 @@ class Config:
             return os.environ[per]
         return os.environ.get(self.nvidia_api_key_env)
 
+    def groq_api_key(self):
+        """Groq API key from env (build phase). None if unset."""
+        return os.environ.get(self.groq_api_key_env)
+
     def nvidia_urls(self):
         """Return (ocr_url, page_elements_url, table_structure_url) for the mode."""
         if (self.nvidia_mode or "cloud").lower() == "cloud":
@@ -184,6 +199,8 @@ class Config:
                     "NVIDIA_*_API_KEY or shared $" + self.nvidia_api_key_env)
         if lb == "ollama" and not (self.ollama_base_url or self.llm_base_url):
             errs.append("llm_backend=ollama but no NHPC_OLLAMA_BASE_URL set")
+        if lb == "groq" and not self.groq_api_key():
+            errs.append("llm_backend=groq but no API key in env $" + self.groq_api_key_env)
         return errs
 
     # --- trace / observability -------------------------------------------

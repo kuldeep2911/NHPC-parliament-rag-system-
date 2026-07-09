@@ -165,12 +165,6 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
     if len(dnums) > 1:
         out_flags.append("multi_diary_document")
 
-    # --- collect per-part records (deterministic-first) ----------------------
-    subparts = _split_subparts(text, meta)
-    reply_format = classify_reply_format(text, subparts)
-    if reply_format == "covering_letter":
-        out_flags.append("covering_letter_format")
-
     # tables the extractor produced (dedup by table_id)
     all_tables, seen_tid = [], set()
     for p in pairs:
@@ -179,9 +173,28 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
                 seen_tid.add(t.table_id)
                 all_tables.append(t)
 
-    # part_records: ordered {part_label, question_text, answer_text, qlang}
+    # part_records: ordered {part_label, question_text, answer_text}.
+    # SOURCE PRIORITY:
+    #  1. If the LLM produced the grouping ('model_extracted'), TRUST its per-pair
+    #     answers — the LLM handles ambiguous mappings the splitter can't (e.g.
+    #     12183: a,b,c share boilerplate but d gets its own substantive answer).
+    #  2. Else deterministic sub-part split.
+    #  3. Else fall back to LLM pairs / single block.
+    llm_made_pairs = "model_extracted" in flags and len(pairs) >= 1
+    subparts = None if llm_made_pairs else _split_subparts(text, meta)
+    reply_format = classify_reply_format(text, subparts)
+    if reply_format == "covering_letter":
+        out_flags.append("covering_letter_format")
+
     part_records = []
-    if subparts:
+    if llm_made_pairs:
+        for i, p in enumerate(pairs):
+            lm = re.match(r"\s*\(?([a-h])\)", p.question_text or "", re.I)
+            label = lm.group(1).lower() if lm else chr(ord("a") + i)
+            part_records.append({
+                "part_label": label, "question_text": p.question_text,
+                "answer_text": p.answer_text})
+    elif subparts:
         for sp in subparts:
             part_records.append({
                 "part_label": sp["label"].strip("()"),
@@ -622,10 +635,19 @@ def _extract_prose(doc, layout, qid, meta, cfg, backend, tracer=None):
             tables_index.append(tout.table_id)
             flags += tflags
 
-    # PRIMARY: explicit (a)/(b)/(c) sub-parts are parsed deterministically — for the
-    # NHPC reply format this is more reliable than a small LLM, which tends to drop
-    # answers or under-split. The LLM is used only when there is no clear sub-part
-    # structure to key on.
+    # LLM-PRIMARY grouping (cfg.llm_grouping, for a capable model e.g. groq 70B):
+    # the model decides which parts share which answer — better on semantically
+    # ambiguous mappings than rules. Deterministic is the fallback/validator. The
+    # grounding guard in _model_prose rejects hallucinated output -> deterministic.
+    if getattr(cfg, "llm_grouping", False) and _is_real_model(backend):
+        result = _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer)
+        if result is not None:
+            r_pairs, r_index, r_flags = result
+            return r_pairs, r_index, flags + r_flags + ["llm_grouping"]
+        # model failed/ungrounded -> fall through to deterministic
+
+    # DETERMINISTIC: explicit (a)/(b)/(c) sub-parts (reliable for the NHPC format;
+    # default path, and the fallback when the LLM is unavailable/ungrounded).
     subparts = _split_subparts(text, meta)
     if subparts:
         pairs = _deterministic_prose(text, layout, meta, table_objs, flags)
@@ -637,7 +659,7 @@ def _extract_prose(doc, layout, qid, meta, cfg, backend, tracer=None):
                 model_name="deterministic", duration_ms=None)
         return pairs, tables_index, flags
 
-    # No sub-part structure: let a real model pair questions/answers if configured.
+    # No sub-part structure and no LLM grouping: let a real model pair if configured.
     if _is_real_model(backend):
         result = _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer)
         if result is not None:
@@ -980,22 +1002,32 @@ def _split_subparts(text, meta):
     # Only accept labels that are genuine QUESTION markers: a lowercase ascending
     # run starting at 'a' or 'b', located in the question region (before the last
     # comment). This rejects '(A)/(B)' that appear INSIDE answer prose (e.g. 3213).
-    raw_labels = [(m.start(), m.group(1).lower(), m.group(1))
-                  for m in _PART_LABEL.finditer(body)]
-    last_answer_start = comments[-1][1]
-    low_labels = [(pos, lab) for pos, lab, orig in raw_labels
-                  if not orig.isupper() and pos < last_answer_start]
-    # accept an ascending run starting at 'a' OR at 'b' (the latter means part 'a'
-    # was written WITHOUT a marker, e.g. 6330 -> unlabeled Q1 then b) c)).
-    seq_labels = []
-    if low_labels:
-        start = low_labels[0][1]
-        if start in ("a", "b"):
-            expected = start
-            for pos, lab in low_labels:
-                if lab == expected:
-                    seq_labels.append((pos, lab))
-                    expected = chr(ord(expected) + 1)
+    # A label "(x)" is a QUESTION label (vs content like "(A) Natural Hurdles" or
+    # "(i)/(ii)" bunched inside an answer) if it forms an ascending a,b,c... sequence
+    # AND its region is a "question position": either before the first Comment:, or a
+    # Comment: appears between it and the next label (i.e. it's answered). Case is
+    # IGNORED for the letter (4491 has (a)(b)(C)(d)(e) — the 'C' is a real question).
+    raw_labels = [(m.start(), m.group(1).lower()) for m in _PART_LABEL.finditer(body)]
+    first_com = comments[0][0]
+
+    def _answered(pos, next_pos):
+        # is there a Comment: between this label and the next label?
+        return any(pos < c[0] < next_pos for c in comments)
+
+    seq_labels, expected = [], None
+    for i, (pos, lab) in enumerate(raw_labels):
+        next_pos = raw_labels[i + 1][0] if i + 1 < len(raw_labels) else len(body)
+        in_question_position = pos < first_com or _answered(pos, next_pos)
+        if not in_question_position:
+            continue  # a content label inside an answer block -> skip
+        if expected is None:
+            if lab in ("a", "b"):     # sequence may start at a, or b (a unlabeled)
+                expected = lab
+            else:
+                continue
+        if lab == expected:
+            seq_labels.append((pos, lab))
+            expected = chr(ord(expected) + 1)
     labels = seq_labels
 
     q_events = []   # (position, question_text)
