@@ -1024,6 +1024,58 @@ def split_answer_blocks(answer_text):
 # A Comment:/Answer:/Reply: marker that INTRODUCES an answer block. Anchored so we
 # find each one's position in the reply.
 _COMMENT_MARKER = re.compile(r"\b(comments?|answer|reply|उत्तर)\b\s*[:.\-]", re.I)
+
+# A sentence that starts a parliamentary sub-question when it has no (x) label.
+_QUESTION_START = re.compile(
+    r"(?:(?<=\n)|(?<=^))\s*(?:\(?[a-h]\)[\s.]+)?"
+    r"(whether\b|if\s+so\b|the\s+details\b|the\s+number\b|the\s+steps\b|"
+    r"the\s+status\b|the\s+reasons\b|the\s+measures\b|the\s+quantum\b|"
+    r"the\s+share\b|the\s+role\b|the\s+extent\b)", re.I)
+
+
+def _segment_reply(reply_text):
+    """
+    Split a reply into (question_block, answer_blocks).
+
+    An ANSWER block starts at a Comment:/Answer:/Reply: marker and ends at the NEXT
+    question start OR the next Comment: — whichever comes first. This keeps an
+    interleaved reply (Q, Comment, Q, Comment ...) from swallowing the following
+    question into the previous answer.
+
+    question_block is every question segment joined in order (so the model sees all
+    questions, including those that appear after an answer in interleaved replies).
+    """
+    m_head = re.search(r"is\s+as\s+below\s*:?\s*", reply_text, re.I)
+    body = reply_text[m_head.end():] if m_head else reply_text
+
+    comments = [(m.start(), m.end()) for m in _COMMENT_MARKER.finditer(body)]
+    if not comments:
+        return body.strip(), []
+
+    q_starts = [m.start() for m in _QUESTION_START.finditer(body)]
+
+    answer_blocks, q_segments = [], []
+    prev_end = 0
+    for i, (cs, ce) in enumerate(comments):
+        # question text that sits between the previous answer and this Comment:
+        seg = body[prev_end:cs].strip()
+        if seg:
+            q_segments.append(seg)
+        next_comment = comments[i + 1][0] if i + 1 < len(comments) else len(body)
+        # first question start strictly after this Comment: bounds the answer
+        next_q = next((q for q in q_starts if q > ce), len(body))
+        end = min(next_comment, next_q)
+        blk = re.sub(r"\s+", " ", body[ce:end]).strip()
+        if blk:
+            answer_blocks.append(blk)
+        prev_end = end
+
+    tail = body[prev_end:].strip()
+    if tail and any(q >= prev_end for q in q_starts):
+        q_segments.append(tail)
+
+    question_block = "\n".join(q_segments).strip()
+    return question_block, answer_blocks
 # An explicit sub-part label at a boundary: (a) / a) / a.
 _PART_LABEL = re.compile(r"(?:(?<=\n)|(?<=\s)|^)\(?([a-h])\)[\s.]", re.I)
 
@@ -1349,23 +1401,13 @@ def _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer=None):
         "\"related_question_numbers\":[\"<NUM>\"],\"confidence\":\"high\"}]}"
     )
     reply_text = doc.full_text()
-    # PRE-SEGMENT the answer blocks so the LLM never has to guess answer boundaries
-    # (it was splitting one Comment: block into two, e.g. 3213 d/e). We hand it:
-    #  - question_block: text BEFORE the first Comment: (the questions live here).
-    #  - answer_blocks:  the verbatim text of each Comment:->next-Comment: block.
-    # The LLM's job is only to ASSIGN whole blocks to questions (and mark sharing),
-    # NOT to segment. An answer_text MUST be exactly one of these blocks (or, when a
-    # block is shared, the same block repeated on each covered question).
-    m_head = re.search(r"is\s+as\s+below\s*:?\s*", reply_text, re.I)
-    after_head = reply_text[m_head.end():] if m_head else reply_text
-    marks = list(_COMMENT_MARKER.finditer(after_head))
-    question_block = (after_head[:marks[0].start()] if marks else after_head).strip()
-    answer_blocks = []
-    for i, mk in enumerate(marks):
-        end = marks[i + 1].start() if i + 1 < len(marks) else len(after_head)
-        blk = re.sub(r"\s+", " ", after_head[mk.end():end]).strip()
-        if blk:
-            answer_blocks.append(blk)
+    # PRE-SEGMENT the reply into clean question and answer units so the LLM only has
+    # to ASSIGN blocks to questions (never to find boundaries). Crucially an answer
+    # block ends at the NEXT QUESTION or the next Comment: — whichever comes first —
+    # otherwise an interleaved reply (Q, Comment, Q, Comment ...) swallows the next
+    # question into the previous answer and the mapping becomes impossible (4570,
+    # 6306, 7167).
+    question_block, answer_blocks = _segment_reply(reply_text)
     ir_payload = {
         "reply_text": reply_text[:12000],
         "question_block": question_block[:4000],

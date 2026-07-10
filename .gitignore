@@ -1,6 +1,8 @@
 # ── Secrets — NEVER commit API keys or tokens ───────────────────────────
 .env
 .env.*
+# ...but DO track the placeholder template (contains no real keys)
+!.env.example
 *.key
 *.pem
 
