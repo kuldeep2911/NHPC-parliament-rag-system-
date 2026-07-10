@@ -164,6 +164,10 @@ class RunTracer:
         self.enabled = cfg.trace_enabled
         self.sink = None
         self.status = "disabled"
+        # OPTIONAL Langfuse mirror. Constructed always, but a hard no-op unless
+        # cfg.langfuse_enabled -- when off it imports nothing and does nothing, so
+        # the durable sink below is entirely unaffected. Independent of trace_enabled.
+        self.langfuse = _make_langfuse(cfg)
         if not self.enabled:
             return
         # choose sink
@@ -184,6 +188,10 @@ class RunTracer:
         if self.sink:
             self.sink.start_run({"backend": backend_name,
                                  "config": _safe_config(self.cfg)})
+        if self.langfuse and self.langfuse.enabled:
+            self.langfuse.start_run(self.run_id,
+                                    {"backend": backend_name,
+                                     "config": _safe_config(self.cfg)})
 
     def finish(self, summary: dict):
         if self.sink:
@@ -192,6 +200,8 @@ class RunTracer:
                                    "summary": summary})
             except Exception:
                 pass
+        if self.langfuse and self.langfuse.enabled:
+            self.langfuse.finish()
 
     def for_doc(self, question_path: str, question_id, backend_name: str):
         return DocTracer(self, question_path, question_id, backend_name)
@@ -211,7 +221,10 @@ class DocTracer:
 
     def step(self, step: str, payload: dict, model_name: str = None,
              duration_ms: int = None):
-        if not (self.rt and self.rt.sink):
+        rt = self.rt
+        lf = getattr(rt, "langfuse", None) if rt else None
+        # Nothing to do only if BOTH the durable sink and the Langfuse mirror are off.
+        if not rt or (not rt.sink and not (lf and lf.enabled)):
             return
         row = {
             "run_id": self.run_id,
@@ -224,10 +237,27 @@ class DocTracer:
             "duration_ms": duration_ms,
             "payload": payload,
         }
-        try:
-            self.rt.sink.write_step(row)
-        except Exception:
-            pass  # tracing must never crash the run
+        if rt.sink:
+            try:
+                rt.sink.write_step(row)
+            except Exception:
+                pass  # tracing must never crash the run
+        if lf and lf.enabled:
+            lf.log_step(row)  # already swallows its own exceptions
+
+
+def _make_langfuse(cfg):
+    """
+    Build the optional Langfuse mirror. Returns a LangfuseTracer (which is itself a
+    no-op when cfg.langfuse_enabled is false), or None if even importing the small
+    wrapper fails. Importing langfuse_client does NOT import the langfuse SDK -- that
+    only happens inside LangfuseTracer when enabled -- so this is safe when off.
+    """
+    try:
+        from .langfuse_client import LangfuseTracer
+        return LangfuseTracer(cfg)
+    except Exception:
+        return None
 
 
 def _safe_config(cfg) -> dict:

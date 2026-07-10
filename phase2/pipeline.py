@@ -334,8 +334,10 @@ def run(cfg, only=None):
     if not cfg.dry_run:
         tracer.start(backend_label)
 
+    lf = getattr(tracer, "langfuse", None)
+    lf_status = lf.status if lf else "disabled"
     print(f"Phase 2 parsing | parser={pb} llm={llm.name} | docling={'yes' if HAS_DOCLING else 'no'}"
-          f" | run_id={run_id} | trace={tracer.status}"
+          f" | run_id={run_id} | trace={tracer.status} | langfuse={lf_status}"
           f"{' | DRY RUN' if cfg.dry_run else ''}")
 
     records = []

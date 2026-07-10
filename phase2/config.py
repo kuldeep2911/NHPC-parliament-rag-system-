@@ -193,6 +193,12 @@ class Config:
         return (os.environ.get(self.gemini_api_key_env)
                 or os.environ.get("GOOGLE_API_KEY"))
 
+    def langfuse_keys(self):
+        """(public_key, secret_key) from env. Either may be None. Read only when
+        langfuse_enabled; never logged."""
+        return (os.environ.get(self.langfuse_public_key_env),
+                os.environ.get(self.langfuse_secret_key_env))
+
     def nvidia_urls(self):
         """Return (ocr_url, page_elements_url, table_structure_url) for the mode."""
         if (self.nvidia_mode or "cloud").lower() == "cloud":
@@ -244,6 +250,20 @@ class Config:
     # _reports/trace/ so the pipeline runs without a DB. One env var flips to PG.
     trace_dsn: str = field(default_factory=lambda: _env_str("NHPC_TRACE_DSN", ""))
     trace_enabled: bool = field(default_factory=lambda: _env_bool("NHPC_TRACE", True))
+
+    # --- Langfuse (OPTIONAL developer-facing trace UI; OFF by default) --------
+    # A thin MIRROR on top of the Postgres/JSONL trace layer above -- that layer
+    # stays the durable system-of-record; Langfuse only adds a browsable UI. It is
+    # DORMANT unless langfuse_enabled is true: when false the SDK is never imported,
+    # never connects, and adds no latency. When true (on the on-prem server) it
+    # points at a SELF-HOSTED Langfuse instance -- NOT Langfuse cloud, since traces
+    # carry document content. Validated only when enabled; missing keys -> log and
+    # fall back to disabled rather than crash. One flag flips it on with no code
+    # change. See phase2/trace/langfuse_client.py.
+    langfuse_enabled: bool = field(default_factory=lambda: _env_bool("LANGFUSE_ENABLED", False))
+    langfuse_host: str = field(default_factory=lambda: _env_str("LANGFUSE_HOST", "http://localhost:3000"))
+    langfuse_public_key_env: str = field(default_factory=lambda: _env_str("LANGFUSE_PUBLIC_KEY_ENV", "LANGFUSE_PUBLIC_KEY"))
+    langfuse_secret_key_env: str = field(default_factory=lambda: _env_str("LANGFUSE_SECRET_KEY_ENV", "LANGFUSE_SECRET_KEY"))
 
     # --- parser adapters (activate if the library is importable) ---
     prefer_docling: bool = field(default_factory=lambda: _env_bool("NHPC_USE_DOCLING", True))

@@ -1,8 +1,10 @@
 # ── Secrets — NEVER commit API keys or tokens ───────────────────────────
 .env
 .env.*
-# ...but DO track the placeholder template (contains no real keys)
+# ...but DO track the placeholder templates (contain no real secrets)
 !.env.example
+!*.example
+!*.env.example
 *.key
 *.pem
 
@@ -12,6 +14,9 @@
 Original Data/
 PARLIAMENT*/
 organized/
+# trace output (JSONL run steps) holds document content — never commit
+_reports/
+**/_reports/
 
 # ── Python ──────────────────────────────────────────────────────────────
 __pycache__/
