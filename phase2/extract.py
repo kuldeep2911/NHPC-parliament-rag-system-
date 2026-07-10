@@ -342,6 +342,11 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
         "sub_questions": [sq.to_dict() for sq in sub_questions],
         "answer_groups": [g.to_dict() for g in answer_groups],
         "diary_level_tables": [t.to_dict() for t in diary_level_tables],
+        # tables_index must list the FINAL, group-prefixed table_ids (set by the
+        # re-key above), not the pre-key ids extract_qa returned -- otherwise the
+        # index ("8773_t1") disagrees with the id inside the group ("8773_g1_t1").
+        "tables_index": [t.table_id for g in answer_groups for t in g.tables]
+                        + [t.table_id for t in diary_level_tables],
         "annexures_referenced": annexures_all,
         "annexures": annexures,
         "annexure_content_present": any(a["file_present"] for a in annexures) if annexures else False,
@@ -915,7 +920,9 @@ def references_annexure(text):
 _POINTS_TO_TABLE = re.compile(
     r"\b(as\s+(?:given|shown|under)\s+below|given\s+below|as\s+under|"
     r"following\s+(?:table|details)|details\s+(?:is|are)\s+as\s+(?:given|under|below)|"
-    r"as\s+follows|tabulated\s+below)\b", re.I)
+    r"as\s+follows|tabulated\s+below|"
+    r"(?:is|are)\s+(?:detailed|given|shown|tabulated)\s+(?:here)?(?:under|below|as\s+under)|"
+    r"detailed\s+hereunder)\b", re.I)
 
 
 def _points_to_table(answer_text):
@@ -1616,6 +1623,29 @@ def _pairs_from_spans(sqs, obj, table_objs, meta, repairs, tables_index,
     # "every table claimed at least once", not "exactly once". A table nobody claims
     # means the model under-assigned -> fall back rather than silently drop it.
     by_id = {t.table_id: t for t in all_tabs}
+
+    # RECONCILE over-assignment: the model sometimes names one table on SEVERAL parts
+    # that do NOT share an answer (8773: table put on a,b AND d, but only d's answer
+    # introduces it). That is a contradiction -- a table lives in one answer. When a
+    # table's claimants span more than one answer, keep it only on the span whose
+    # answer text actually POINTS TO a table ("as under"/"given below"/"is detailed"/
+    # "are as follows"); if exactly one such span exists, drop the rest.
+    for tid in list(by_id):
+        claimants = [sq for sq in sqs if tid in sq["answer_table_ids"]]
+        spans = {tuple(sq["answer_lines"]) if sq["answer_lines"] else None
+                 for sq in claimants}
+        if len(claimants) <= 1 or len(spans) <= 1:
+            continue  # single claimant, or all share one answer -> fine
+        pointing = [sq for sq in claimants if _points_to_table(sq["answer_text"])]
+        if len(pointing) == 1:
+            keep = pointing[0]
+            for sq in claimants:
+                if sq is not keep:
+                    sq["answer_table_ids"] = [x for x in sq["answer_table_ids"]
+                                              if x != tid]
+            if "table_reassigned_to_pointing_answer" not in flags:
+                flags.append("table_reassigned_to_pointing_answer")
+
     claimed = {tid for sq in sqs for tid in sq["answer_table_ids"] if tid in by_id}
     model_assigned_tables = bool(all_tabs) and claimed == set(by_id)
     if all_tabs and not model_assigned_tables:

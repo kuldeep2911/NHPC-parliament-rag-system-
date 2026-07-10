@@ -197,25 +197,51 @@ def _tag_role(name: str) -> str:
     return "other"
 
 
+_LEGEND_CELL = re.compile(r"\d{1,2}(\s*=\s*\d+(\s*[+\-*/]\s*\d+)*)?$")
+
+
+def _is_column_legend(row):
+    """
+    True if every non-empty cell is a bare column index or an index formula
+    ("1", "2", "3", "4=2+3") -- the reference-number line some tables print under
+    the header. Requires >=2 such cells so a genuine one-number row isn't dropped.
+    Real data (years "2020-21", amounts "11,515.11", labels) never matches.
+    """
+    cells = [str(c).strip() for c in row if str(c).strip()]
+    if len(cells) < 2:
+        return False
+    return all(_LEGEND_CELL.fullmatch(c) for c in cells)
+
+
 def _stitch_wrapped_rows(header, body):
     """
-    Stitch rows that are clearly continuations of the previous row (a wrapped
-    cell): a row whose leading qno/serial column is empty but which has content
-    elsewhere gets appended to the row above. Returns (rows, stitched_count).
+    Stitch rows that are clearly continuations of the previous row (a wrapped cell).
+
+    A continuation row is one whose FIRST cell is EMPTY while a later cell still has
+    content -- i.e. a value wrapped onto a second physical line, leaving the label
+    column blank. Such a row is merged cell-wise into the row above.
+
+    We must NOT treat a normal data row as a continuation just because its first cell
+    is non-numeric: many tables have a TEXT label in column 0 ("PDD, Jammu &Kashmir",
+    "Executive", "FY 2019-20"). The old rule ("first cell doesn't start with a digit
+    => continuation") collapsed every such table into a single row (8773, 8813, 3043,
+    5341, u-2787). The first-cell-EMPTY signal is what actually marks a wrapped row.
+
+    Returns (rows, stitched_count).
     """
     if not body:
         return body, 0
     stitched = 0
     out = []
     for row in body:
-        first = row[0] if row else ""
-        has_id = bool(re.match(r"^\s*\d", first))
-        if out and not has_id and any(c for c in row):
-            # continuation: append cellwise
+        first = (row[0] if row else "").strip()
+        rest_has_content = any(str(c).strip() for c in row[1:])
+        is_continuation = (not first) and rest_has_content
+        if out and is_continuation:
             prev = out[-1]
             for i in range(min(len(prev), len(row))):
                 if row[i]:
-                    prev[i] = (prev[i] + " " + row[i]).strip()
+                    prev[i] = (str(prev[i]) + " " + str(row[i])).strip()
             stitched += 1
         else:
             out.append(list(row))
@@ -245,6 +271,11 @@ def clean_table(raw: RawTable, table_id: str):
         flags.append("table_preamble_skipped")  # title rows above header captured
 
     body, stitched = _stitch_wrapped_rows(header, body)
+
+    # Drop a "column legend" row -- a row that is nothing but the column reference
+    # numbers a source sometimes prints under the header ("1 | 2 | 3 | 4=2+3", as in
+    # 8773). It carries no data and would otherwise become a bogus first data row.
+    body = [r for r in body if not _is_column_legend(r)]
 
     # consistency check: rows wildly varying width => low confidence
     widths = {len(r) for r in body} | {len(header)}

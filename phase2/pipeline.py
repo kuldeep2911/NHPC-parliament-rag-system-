@@ -232,6 +232,9 @@ def parse_one(qdir, root, cfg, parser, llm, run_tracer=None):
     if "model_extracted" in xflags and hasattr(llm, "model_for"):
         parsed["models_used"]["llm"] = llm.model_for("llm")
 
+    # Provisional index from extract_qa; build_document_fields OVERWRITES it below
+    # with the final group-prefixed table_ids (parsed.update). Kept so the field
+    # exists even on the rare path where build_document_fields returns nothing.
     parsed["tables_index"] = tindex
 
     # diary-as-container document fields (sub_questions, diary_numbers, reply_format,
