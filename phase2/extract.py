@@ -25,6 +25,7 @@ import re
 from .ir import Pair, TableOut, detect_language
 from .tables import build_table_out, clean_table
 from .llm import BackendError
+from . import spans as _spans
 
 QNUM_RE = re.compile(
     r"\b(?:Q\.?\s*No\.?|Question\s*No\.?|Dy\.?\s*No\.?|Diary\s*No\.?|"
@@ -193,27 +194,30 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
             label = lm.group(1).lower() if lm else chr(ord("a") + i)
             part_records.append({
                 "part_label": label, "question_text": p.question_text,
-                "answer_text": p.answer_text})
+                "answer_text": p.answer_text, "answer_span": p.answer_span,
+                "tables": list(p.tables or [])})
     elif subparts:
         for sp in subparts:
             part_records.append({
                 "part_label": sp["label"].strip("()"),
                 "question_text": sp["question_text"],
-                "answer_text": sp["answer_text"]})
+                "answer_text": sp["answer_text"], "answer_span": None,
+                "tables": None})
     elif len(pairs) > 1:
         for i, p in enumerate(pairs):
             lm = re.match(r"\s*\(?([a-h])\)", p.question_text or "", re.I)
             label = lm.group(1).lower() if lm else chr(ord("a") + i)
             part_records.append({
                 "part_label": label, "question_text": p.question_text,
-                "answer_text": p.answer_text})
+                "answer_text": p.answer_text, "answer_span": p.answer_span,
+                "tables": list(p.tables or [])})
         if reply_format == "unknown":
             reply_format = "questions_then_answers"
     else:
         part_records.append({
             "part_label": "(single)",
             "question_text": _question_body(text) or "(question text not separated)",
-            "answer_text": _answer_body(text)})
+            "answer_text": _answer_body(text), "answer_span": None, "tables": None})
 
     # --- group parts by SHARED answer (answer stored once) -------------------
     groups_raw, part_to_group = _group_answers(part_records)
@@ -279,7 +283,8 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
 
     # --- attach tables INSIDE their answer group -----------------------------
     diary_level_tables = _attach_tables_to_groups(
-        all_tables, answer_groups, part_records, part_to_group, out_flags)
+        all_tables, answer_groups, part_records, part_to_group, out_flags,
+        model_assigned="tables_model_assigned" in flags)
 
     # Change 3: re-key table_id/row_id so they are group-prefixed and globally
     # unique: "<qid>_<group>_t<n>" and "..._r<m>". A table lives in exactly one
@@ -378,15 +383,21 @@ def _refine_reply_format(reply_format, part_records, groups_raw):
 
 
 def _attach_tables_to_groups(all_tables, answer_groups, part_records,
-                             part_to_group, out_flags):
+                             part_to_group, out_flags, model_assigned=False):
     """
-    Put each table INSIDE the answer group it belongs to. Tables are assigned
-    INDIVIDUALLY (a doc with 2 tables for parts c and d must put one in each group,
-    not both in one). Strategy, in order:
+    Put each table INSIDE the answer group it belongs to.
+
+    When `model_assigned` is true the LLM already named the owning sub-question for
+    every table (it saw each table's headers and sample rows). That assignment wins:
+    it reads the table's SUBJECT, whereas the fallback below can only pattern-match
+    phrases like "given below"/"as under" in the answer text, and defaults to the
+    LAST group when none match -- which put 5341's GENERATION and PAF tables on
+    (d,e) instead of (a), whose answer calls them "key indicators".
+
+    Fallback strategy (no model assignment), in order:
       - single answer group  -> all tables go to it.
-      - groups whose answer 'points to a table' ("given below/as under"): if the
-        count of such groups equals the number of tables, map them 1:1 in document
-        order (tables sorted by page). This handles c->table1, d->table2.
+      - groups whose answer 'points to a table': if the count of such groups equals
+        the number of tables, map them 1:1 in document order (tables sorted by page).
       - one pointer group -> it takes all tables.
       - counts don't line up / no pointer -> best-guess, mark low-confidence +
         table_group_uncertain; NEVER silently orphan.
@@ -394,6 +405,32 @@ def _attach_tables_to_groups(all_tables, answer_groups, part_records,
     """
     if not all_tables:
         return []
+
+    if model_assigned:
+        # Map each part to its AnswerGroup via answers_parts (part_to_group holds the
+        # LOCAL "g1" ids while AnswerGroup.answer_group_id is already globalised).
+        # A shared answer group collects the table from whichever part carried it.
+        group_of_part = {}
+        for g in answer_groups:
+            for p in g.answers_parts:
+                group_of_part[p] = g
+        placed = set()
+        for rec in part_records:
+            grp = group_of_part.get(rec["part_label"])
+            if grp is None:
+                continue
+            for t in (rec.get("tables") or []):
+                if t.table_id not in placed:
+                    grp.tables.append(t)
+                    placed.add(t.table_id)
+        for g in answer_groups:
+            if g.tables:
+                _mark_answer_is_table(g)
+        orphans = [t for t in all_tables if t.table_id not in placed]
+        if orphans:
+            out_flags.append("table_orphaned_after_model_assignment")
+        return orphans
+
     tables = sorted(all_tables, key=lambda t: (getattr(t, "page", 0),
                                                getattr(t, "table_id", "")))
     if len(answer_groups) == 1:
@@ -481,30 +518,51 @@ def _validate_group_links(sub_questions, answer_groups, out_flags):
 def _group_answers(part_records):
     """
     Group sub-parts by SHARED answer into answer_groups. Input: ordered list of
-    dicts {part_label, question_text, answer_text}. Parts whose answer_text is the
-    same (or one is empty and shares the neighbouring answer) collapse into one
-    group. Returns (groups, part_to_group) where:
+    dicts {part_label, question_text, answer_text, answer_span}. Returns
+    (groups, part_to_group) where:
         groups = [{answer_group_id, answers_parts, answer_text}]
         part_to_group = {part_label: answer_group_id}
-    This is the deterministic grouping used for all layout cases; the LLM path
-    produces the same structure for the ambiguous ones.
+
+    IDENTITY, NOT WORDING. When the span extractor supplied `answer_span`, two parts
+    share an answer IFF they point at the SAME span. Grouping is never re-derived
+    from answer_text on that path, because several DISTINCT answer blocks routinely
+    carry identical wording: 11800 has three separate "Does not pertain to NHPC."
+    blocks answering (a,b), (d) and (e,f) — merging them by text collapsed six
+    sub-questions into two groups and lost the document's real structure.
+
+    Only the deterministic fallback (no spans) groups by normalized text, which is
+    the best signal available there.
     """
     def norm(s):
         return re.sub(r"\s+", " ", (s or "").strip().lower())
 
+    use_spans = any(r.get("answer_span") for r in part_records)
+
     groups = []
     part_to_group = {}
+    by_span = {}
     for rec in part_records:
         atext = rec["answer_text"]
-        na = norm(atext)
-        # find an existing group with the SAME answer text (shared answer)
+        span = rec.get("answer_span")
         gid = None
-        if na:
-            for g in groups:
-                if norm(g["answer_text"]) == na:
-                    gid = g["answer_group_id"]
-                    g["answers_parts"].append(rec["part_label"])
-                    break
+
+        if use_spans:
+            # A part with no span never shares: it has no located answer.
+            if span is not None:
+                key = tuple(span)
+                if key in by_span:
+                    gid = by_span[key]
+                    next(g for g in groups if g["answer_group_id"] == gid)[
+                        "answers_parts"].append(rec["part_label"])
+        else:
+            na = norm(atext)
+            if na:
+                for g in groups:
+                    if norm(g["answer_text"]) == na:
+                        gid = g["answer_group_id"]
+                        g["answers_parts"].append(rec["part_label"])
+                        break
+
         if gid is None:
             gid = f"g{len(groups) + 1}"
             groups.append({
@@ -512,6 +570,8 @@ def _group_answers(part_records):
                 "answers_parts": [rec["part_label"]],
                 "answer_text": atext,
             })
+            if use_spans and span is not None:
+                by_span[tuple(span)] = gid
         part_to_group[rec["part_label"]] = gid
     return groups, part_to_group
 
@@ -687,23 +747,36 @@ def _extract_prose(doc, layout, qid, meta, cfg, backend, tracer=None):
             tables_index.append(tout.table_id)
             flags += tflags
 
-    # LLM-PRIMARY grouping (cfg.llm_grouping with a capable model, e.g. groq 70B):
-    # TRUST THE LLM. The prompt now gives it the question_block + n_answer_markers so
-    # it counts questions/answers correctly and never mines a question from '(A)/(i)'
-    # headings inside an answer. We do NOT police it with the deterministic count
-    # (that caused a false conflict when deterministic was itself wrong). The only
-    # guard is grounding: _model_prose rejects output whose answers are not present
-    # in the source (invented text) and falls back to deterministic in that case.
-    subparts = _split_subparts(text, meta)
+    # LLM-PRIMARY extraction (cfg.llm_grouping with a capable model, e.g. groq 70B).
+    #
+    # The model LOCATES the questions and answers itself, by line range, and we slice
+    # the text. NOTHING on this path encodes what a particular session's documents
+    # look like — no question-opener phrase list, no `Comment:`-boundary segmentation,
+    # no (a)/(b) label rules. That is what lets the same code parse 20+ sessions whose
+    # formatting differs slightly, instead of needing a new rule for each one.
+    #
+    # `spans.verify_and_repair` checks the model's spans against the source (in range,
+    # ordered, a question never contains an answer marker, ...). Because the model
+    # returns only NUMBERS, it cannot invent text. If its spans cannot be verified we
+    # fall back to the deterministic extractor rather than emit a wrong pairing.
     if getattr(cfg, "llm_grouping", False) and _is_real_model(backend):
+        result = _model_spans(doc, layout, meta, cfg, backend, table_objs, tracer)
+        if result is not None:
+            r_pairs, r_index, r_flags = result
+            return r_pairs, r_index, flags + r_flags + ["llm_grouping"]
+        flags.append("span_extraction_failed")
+        # spans unusable -> try the older text-copy contract before deterministic
         result = _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer)
         if result is not None:
             r_pairs, r_index, r_flags = result
             return r_pairs, r_index, flags + r_flags + ["llm_grouping"]
-        # only if the model failed / produced ungrounded output -> deterministic
 
-    # DETERMINISTIC (default path / fallback when LLM unavailable or ungrounded).
+    # DETERMINISTIC FALLBACK. Rules live here ONLY as a safety net for when the LLM is
+    # unreachable (Groq down / 429 exhausted) or its output cannot be verified. They
+    # are never the primary path; a file that lands here is flagged for review.
+    subparts = _split_subparts(text, meta)
     if subparts:
+        flags.append("deterministic_fallback")
         pairs = _deterministic_prose(text, layout, meta, table_objs, flags)
         if tracer:
             tracer.step("extraction", {
@@ -1021,16 +1094,69 @@ def split_answer_blocks(answer_text):
     return blocks if len(blocks) >= 2 else []
 
 
+# An explicit sub-part label at a boundary: (a) / a) / a.
+_PART_LABEL = re.compile(r"(?:(?<=\n)|(?<=\s)|^)\(?([a-h])\)[\s.]", re.I)
+
 # A Comment:/Answer:/Reply: marker that INTRODUCES an answer block. Anchored so we
 # find each one's position in the reply.
 _COMMENT_MARKER = re.compile(r"\b(comments?|answer|reply|उत्तर)\b\s*[:.\-]", re.I)
 
-# A sentence that starts a parliamentary sub-question when it has no (x) label.
+# A sentence that starts a parliamentary sub-question when it has NO (x) label.
+# This is a fallback only: it is a closed vocabulary of English question openers and
+# therefore cannot generalise across sessions. Structural labels (_PART_LABEL, via
+# _question_label_positions) are always preferred when the reply has them.
 _QUESTION_START = re.compile(
     r"(?:(?<=\n)|(?<=^))\s*(?:\(?[a-h]\)[\s.]+)?"
     r"(whether\b|if\s+so\b|the\s+details\b|the\s+number\b|the\s+steps\b|"
     r"the\s+status\b|the\s+reasons\b|the\s+measures\b|the\s+quantum\b|"
     r"the\s+share\b|the\s+role\b|the\s+extent\b)", re.I)
+
+
+def _question_label_positions(body, comments):
+    """
+    Positions of the genuine sub-question labels (a)/(b)/(c)... in `body`.
+
+    A label is a QUESTION label (as opposed to content like "(A) Natural Hurdles"
+    enumerated inside an answer) when BOTH hold:
+
+      * the ascending run it belongs to STARTS before the first Comment: — in a real
+        reply the questions are posed before any of them is answered; and
+      * it continues that ascending a,b,c... run (which may start at 'a' or 'b',
+        since part 'a' is sometimes unlabeled). Case is ignored: 4491 writes
+        "(a)(b)(C)(d)(e)" and the 'C' is a real question.
+
+    Labels are accepted wherever they fall once the run has started, so this handles
+    interleaved replies (Q, Comment:, Q, Comment: ...) and shared answers alike —
+    3043's "e) ... f) ... Comment: <one answer>" yields both e and f.
+
+    `comments` is the list of (start, end) spans from _COMMENT_MARKER.
+
+    Keying answer-block segmentation on this document STRUCTURE, rather than on a
+    hardcoded list of English question openers, is what makes the extractor work on
+    any session without per-session tuning.
+    """
+    raw_labels = [(m.start(), m.group(1).lower()) for m in _PART_LABEL.finditer(body)]
+    if not raw_labels or not comments:
+        return []
+    first_com = comments[0][0]
+
+    # The run must START before the first Comment:. A run that only begins after
+    # answering has started is enumerated content inside an answer (3213's "(A)
+    # Natural Hurdles / (B) Man made hurdles"), not a question list. Requiring the
+    # letters to ascend by exactly one keeps such enumerations from re-entering the
+    # run once it has legitimately started.
+    seq, expected = [], None
+    for pos, lab in raw_labels:
+        if expected is None:
+            if pos < first_com and lab in ("a", "b"):   # run may start at a, or b
+                expected = lab
+            else:
+                continue
+        if lab != expected:
+            continue
+        seq.append(pos)
+        expected = chr(ord(expected) + 1)
+    return seq
 
 
 def _segment_reply(reply_text):
@@ -1042,6 +1168,10 @@ def _segment_reply(reply_text):
     interleaved reply (Q, Comment, Q, Comment ...) from swallowing the following
     question into the previous answer.
 
+    Question starts come from the sub-question LABELS when the reply has them, and
+    only fall back to the _QUESTION_START phrase list for unlabeled replies. Keying
+    on labels makes this work for any question wording, in any session.
+
     question_block is every question segment joined in order (so the model sees all
     questions, including those that appear after an answer in interleaved replies).
     """
@@ -1052,7 +1182,17 @@ def _segment_reply(reply_text):
     if not comments:
         return body.strip(), []
 
-    q_starts = [m.start() for m in _QUESTION_START.finditer(body)]
+    # Prefer structural labels; union with the phrase matches so a labelled reply
+    # still benefits from a boundary the labels missed (e.g. an unlabeled part 'a').
+    label_starts = _question_label_positions(body, comments)
+    phrase_starts = [m.start() for m in _QUESTION_START.finditer(body)]
+    if label_starts:
+        q_starts = sorted(set(label_starts) | {
+            p for p in phrase_starts
+            if not any(abs(p - l) <= 3 for l in label_starts)
+        })
+    else:
+        q_starts = phrase_starts
 
     answer_blocks, q_segments = [], []
     prev_end = 0
@@ -1076,8 +1216,6 @@ def _segment_reply(reply_text):
 
     question_block = "\n".join(q_segments).strip()
     return question_block, answer_blocks
-# An explicit sub-part label at a boundary: (a) / a) / a.
-_PART_LABEL = re.compile(r"(?:(?<=\n)|(?<=\s)|^)\(?([a-h])\)[\s.]", re.I)
 
 
 def _split_subparts(text, meta):
@@ -1106,51 +1244,33 @@ def _split_subparts(text, meta):
     # Determine the QUESTIONS and their positions. Two shapes:
     #  (A) explicit (a)/(b)/(c) labels -> each label starts a question.
     #  (B) no labels -> questions are the sentences BEFORE the first Comment:.
-    # Only accept labels that are genuine QUESTION markers: a lowercase ascending
-    # run starting at 'a' or 'b', located in the question region (before the last
-    # comment). This rejects '(A)/(B)' that appear INSIDE answer prose (e.g. 3213).
-    # A label "(x)" is a QUESTION label (vs content like "(A) Natural Hurdles" or
-    # "(i)/(ii)" bunched inside an answer) if it forms an ascending a,b,c... sequence
-    # AND its region is a "question position": either before the first Comment:, or a
-    # Comment: appears between it and the next label (i.e. it's answered). Case is
-    # IGNORED for the letter (4491 has (a)(b)(C)(d)(e) — the 'C' is a real question).
-    raw_labels = [(m.start(), m.group(1).lower()) for m in _PART_LABEL.finditer(body)]
-    first_com = comments[0][0]
-
-    def _answered(pos, next_pos):
-        # is there a Comment: between this label and the next label?
-        return any(pos < c[0] < next_pos for c in comments)
-
-    seq_labels, expected = [], None
-    for i, (pos, lab) in enumerate(raw_labels):
-        next_pos = raw_labels[i + 1][0] if i + 1 < len(raw_labels) else len(body)
-        in_question_position = pos < first_com or _answered(pos, next_pos)
-        if not in_question_position:
-            continue  # a content label inside an answer block -> skip
-        if expected is None:
-            if lab in ("a", "b"):     # sequence may start at a, or b (a unlabeled)
-                expected = lab
-            else:
-                continue
-        if lab == expected:
-            seq_labels.append((pos, lab))
-            expected = chr(ord(expected) + 1)
-    labels = seq_labels
+    # _question_label_positions decides which labels are genuine question markers;
+    # sharing it with _segment_reply keeps the deterministic split and the LLM's
+    # answer blocks working from one definition of "question label".
+    label_pos = _question_label_positions(body, comments)
+    labels = []
+    for pos in label_pos:
+        m_lab = _PART_LABEL.match(body, pos) or _PART_LABEL.search(body, pos, pos + 5)
+        labels.append((pos, m_lab.group(1).lower() if m_lab else "?"))
 
     q_events = []   # (position, question_text)
     if len(labels) >= 2:
-        # capture any question text BEFORE the first label as part 'a' (mixed case,
-        # e.g. 6330: unlabeled Q1 then b) c)).
-        pre = re.sub(r"\s+", " ", body[:labels[0][0]]).strip(" .;")
-        pre = re.sub(r"^.*?is as below\s*:?\s*", "", pre, flags=re.I)
-        if len(pre) >= 15:
-            q_events.append((0, pre))
+        # Capture question text BEFORE the first label as the unlabeled part 'a',
+        # but ONLY when the run starts at 'b' (6330: unlabeled Q1, then b) c)).
+        # When the run already starts at 'a', anything before it is the Subject /
+        # preamble, not a question.
+        if labels[0][1] == "b":
+            pre = re.sub(r"\s+", " ", body[:labels[0][0]]).strip(" .;")
+            pre = re.sub(r"^.*?is as below\s*:?\s*", "", pre, flags=re.I)
+            if len(pre) >= 15:
+                q_events.append((0, pre))
         for i, (pos, lab) in enumerate(labels):
             nxt_lab = labels[i + 1][0] if i + 1 < len(labels) else len(body)
             nxt_com = next((c[0] for c in comments if c[0] > pos), len(body))
             qend = min(nxt_lab, nxt_com)
             qtext = re.sub(r"^\(?[a-h]\)[\s.]*", "",
-                           re.sub(r"\s+", " ", body[pos:qend]).strip())
+                           re.sub(r"\s+", " ", body[pos:qend]).strip(),
+                           flags=re.I)
             q_events.append((pos, qtext.strip(" .;")))
     else:
         # unlabeled: the questions are the sentences BEFORE the first Comment:.
@@ -1320,6 +1440,221 @@ def _deterministic_prose(text, layout, meta, table_objs, flags):
         )
         pairs.append(p)
     return pairs
+
+
+_SPAN_SYSTEM = (
+    "You extract Question-Answer structure from Indian parliament replies (NHPC).\n"
+    "The document is given with 0-based LINE NUMBERS in the form '  7| text'.\n"
+    "Return STRICT JSON only, no prose.\n"
+    "\n"
+    "YOUR TASK: find EVERY sub-question, and for each one the LINE RANGE of the "
+    "question and the LINE RANGE of the answer that addresses it. You report LINE "
+    "NUMBERS ONLY — never copy text. Ranges are INCLUSIVE: [first_line, last_line].\n"
+    "\n"
+    "WHAT IS A SUB-QUESTION:\n"
+    "- The questions are asked near the top of the reply, before/between the answers.\n"
+    "- They may be labelled '(a)' 'a)' 'a.' or have NO label at all (bare clauses "
+    "such as 'Whether ...', 'If so, the details thereof').\n"
+    "- Question wording varies freely ('the details of', 'the contingent liability "
+    "of', 'the list of', 'the target set', 'the difficulties being faced'). Do NOT "
+    "rely on any fixed opening phrase; judge by meaning and position.\n"
+    "- CRITICAL: an enumeration INSIDE an answer is answer CONTENT, not a question. "
+    "e.g. '(A) Natural Hurdles', '(B) Man made hurdles', 'a. If the award is settled' "
+    "appearing after an answer marker are headings within that answer. NEVER emit a "
+    "sub-question for them.\n"
+    "\n"
+    "WHAT IS AN ANSWER:\n"
+    "- Answers normally begin at a marker line: 'Comment:', 'Comments:', 'Answer:', "
+    "'Reply:'. answer_lines MUST START on that marker line and run to the last line "
+    "of that answer (include table/continuation lines that belong to it).\n"
+    "- question_lines MUST NOT include any answer-marker line.\n"
+    "\n"
+    "EVERY ANSWER BLOCK MUST BE USED (hard requirement):\n"
+    "- Count the answer markers. EVERY block belongs to at least one question. Never "
+    "leave a block unassigned; never skip one because it looks redundant. Two blocks "
+    "with identical wording are still TWO blocks answering DIFFERENT questions.\n"
+    "- When N questions are listed and then M answer blocks follow, assign them in "
+    "order: the blocks answer those questions in the order they were asked. With one "
+    "block for several questions, they all share it.\n"
+    "\n"
+    "SHARED ANSWERS (important):\n"
+    "- When ONE answer block addresses SEVERAL questions, give every one of those "
+    "questions the SAME answer_lines range. That is how you express sharing.\n"
+    "- This includes questions listed BACK-TO-BACK before a single block: "
+    "'d) ... e) ... Comment: <one answer>' means d AND e both get that block's range. "
+    "Do NOT give one of them null.\n"
+    "- Do NOT merge a question's own substantive answer into a generic bucket. If a "
+    "block has NHPC-specific content for a question, that question gets that block.\n"
+    "- A bare 'May be replied by MoP/CEA.' applies only to questions with no "
+    "dedicated substantive block.\n"
+    "- Use null for answer_lines ONLY when the document contains no answer block at "
+    "all for that question. If any block follows the question, assign it.\n"
+    "\n"
+    "TABLES:\n"
+    "- `tables` lists every table extracted from this reply, each with a table_id, "
+    "its column headers and a couple of sample rows. The table BODIES are not in the "
+    "document text you see.\n"
+    "- Put each table_id in answer_table_ids of the ONE sub-question whose answer the "
+    "table belongs to — judge by what the table is ABOUT versus what each answer "
+    "discusses. An answer that says 'as under', 'given below', or names the table's "
+    "subject (e.g. 'Generation & Plant Availability Factor (PAF) are key indicators') "
+    "owns those tables.\n"
+    "- Assign EVERY table to exactly one sub-question. Use [] when a sub-question owns "
+    "no table. If two questions share an answer, put the table on either — they share "
+    "the same answer group.\n"
+    "- answer_is_table = true only when the table IS the substance of the answer "
+    "(the prose merely introduces it).\n"
+    "\n"
+    "ALSO REPORT: question_number = the parliament DIARY/QUESTION number of the whole "
+    "reply (e.g. '3043', 'S-77'); it is the SAME for every sub-question. Put the "
+    "'(a)'/'(b)' letter in part_label, never in question_number.\n"
+    "\n"
+    'Schema: {"question_number":str,"sub_questions":['
+    '{"part_label":"a","question_lines":[int,int],"answer_lines":[int,int]|null,'
+    '"answer_table_ids":[str],"answer_is_table":bool,"confidence":"high|low"}]}'
+)
+
+
+def _model_spans(doc, layout, meta, cfg, backend, table_objs, tracer=None):
+    """
+    LLM-PRIMARY extraction: the model LOCATES questions and answers by line range;
+    we SLICE the text ourselves.
+
+    No per-session rules run on this path — no `_QUESTION_START` phrase list, no
+    `_segment_reply`, no `_split_subparts`. The model decides the boundaries and the
+    grouping; `spans.verify_and_repair` only enforces universal structural
+    invariants (spans in range, a question must not contain an answer marker, ...)
+    and can repair the one common off-by-one. Anything unrepairable returns None so
+    the caller falls back to the deterministic extractor rather than emit a wrong
+    pairing.
+
+    Because the model returns only NUMBERS, it cannot invent, paraphrase, or drop a
+    word of the source. That is the anti-hallucination guarantee.
+    """
+    import time
+
+    text = doc.full_text()
+    if not text.strip():
+        return None
+    numbered = _spans.number_lines(text)
+    meta_qid = str(meta.get("question_id", "") or "")
+
+    all_tabs = [t for (t, _i) in table_objs]
+    ans_tabs = [t for (t, isans) in table_objs if isans]
+    tables_index = [t.table_id for t in all_tabs]
+
+    user = json.dumps({
+        "document": numbered,
+        "n_lines": len(text.split("\n")),
+        "metadata_question_id": meta_qid,
+        "n_tables": len(all_tabs),
+        # headers + a couple of rows per table, so the model can tell what each table
+        # is about and attach it to the right answer (it never sees the full bodies).
+        "tables": _spans.table_previews(all_tabs),
+    }, ensure_ascii=False)
+
+    model_name = (backend.model_for("llm") if hasattr(backend, "model_for")
+                  else getattr(backend, "name", "?"))
+
+    for attempt in range(cfg.llm_max_retries + 1):
+        t0 = time.time()
+        raw_out = None
+        try:
+            obj = backend.complete_json(_SPAN_SYSTEM, user, schema_hint="sub_questions")
+            raw_out = obj
+            sqs, errs, repairs = _spans.verify_and_repair(obj, text)
+            dt = int((time.time() - t0) * 1000)
+            if tracer:
+                tracer.step("extraction", {
+                    "path": "span_model", "attempt": attempt,
+                    "system_prompt": _SPAN_SYSTEM, "user_prompt": user[:8000],
+                    "raw_model_output": raw_out, "parsed_valid": not errs,
+                    "validation_errors": errs, "repairs": repairs,
+                    "layout_case": layout.get("case")},
+                    model_name=model_name, duration_ms=dt)
+            if not errs:
+                return _pairs_from_spans(
+                    sqs, obj, table_objs, meta, repairs, tables_index,
+                    all_tabs, ans_tabs)
+            user = (user + "\n\nYour previous output was rejected: "
+                    + "; ".join(errs)
+                    + ". Return corrected STRICT JSON with LINE NUMBERS only.")
+        except (BackendError, Exception) as e:
+            dt = int((time.time() - t0) * 1000)
+            if tracer:
+                tracer.step("extraction", {
+                    "path": "span_model", "attempt": attempt,
+                    "system_prompt": _SPAN_SYSTEM, "user_prompt": user[:8000],
+                    "raw_model_output": raw_out,
+                    "error": f"{type(e).__name__}: {e}"},
+                    model_name=model_name, duration_ms=dt)
+            break
+    return None
+
+
+def _pairs_from_spans(sqs, obj, table_objs, meta, repairs, tables_index,
+                      all_tabs, ans_tabs):
+    """Turn verified line spans into Pair objects (same shape as _pairs_from_model)."""
+    meta_qid = str((meta or {}).get("question_id", "")).strip()
+    raw_qnum = str(obj.get("question_number", "") or "").strip()
+    qnum, _moved = _sanitize_qnum(raw_qnum, meta_qid, "")
+    if not _looks_like_qnum(qnum):
+        qnum = meta_qid
+
+    flags = ["model_extracted", "span_extracted"]
+    if repairs:
+        flags.append("span_repaired")
+
+    # --- table attachment, decided by the MODEL ------------------------------
+    # The model reads each table's headers/sample rows and names the sub-question it
+    # belongs to. Previously every pair received ALL tables and a phrase list
+    # ("given below"/"as under") re-guessed the owner downstream, defaulting to the
+    # LAST group when no phrase matched -- which put 5341's GENERATION and PAF tables
+    # on (d,e) instead of (a), whose answer calls them "key indicators".
+    #
+    # Parts that SHARE an answer legitimately name the same tables, so the check is
+    # "every table claimed at least once", not "exactly once". A table nobody claims
+    # means the model under-assigned -> fall back rather than silently drop it.
+    by_id = {t.table_id: t for t in all_tabs}
+    claimed = {tid for sq in sqs for tid in sq["answer_table_ids"] if tid in by_id}
+    model_assigned_tables = bool(all_tabs) and claimed == set(by_id)
+    if all_tabs and not model_assigned_tables:
+        flags.append("table_assignment_fallback")
+
+    pairs = []
+    for sq in sqs:
+        lab = sq["part_label"]
+        qtext = sq["question_text"]
+        if lab and not re.match(r"^\(?[a-h][)\.]", qtext, re.I):
+            qtext = f"({lab}) {qtext}"
+        atext = sq["answer_text"]
+        is_tab = sq["answer_is_table"]
+        conf = sq["confidence"]
+        if not atext.strip() and not is_tab:
+            conf = "low"
+        if model_assigned_tables:
+            tabs = [by_id[i] for i in sq["answer_table_ids"] if i in by_id]
+        else:
+            tabs = ans_tabs if (is_tab and ans_tabs) else all_tabs
+        pairs.append(Pair(
+            question_number=qnum,
+            question_text=qtext,
+            answer_text=atext,
+            question_language=detect_language(qtext),
+            answer_language=detect_language(atext),
+            answer_is_table=is_tab,
+            related_question_numbers=[qnum],
+            tables=tabs,
+            confidence=conf,
+            # carry the answer's LOCATION so grouping keys on identity, not wording
+            answer_span=tuple(sq["answer_lines"]) if sq["answer_lines"] else None,
+        ))
+    if model_assigned_tables:
+        flags.append("tables_model_assigned")
+
+    if any(not p.answer_text.strip() and not p.answer_is_table for p in pairs):
+        flags.append("empty_answer_span")
+    return pairs, tables_index, flags
 
 
 def _model_prose(doc, layout, meta, cfg, backend, table_objs, tracer=None):

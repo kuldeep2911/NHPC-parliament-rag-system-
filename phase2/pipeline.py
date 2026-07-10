@@ -486,7 +486,7 @@ def main(argv=None):
     ap.add_argument("--parser-backend", default=None, choices=[None, "nemotron", "docling"],
                     help="document parser backend (overrides NHPC_PARSER_BACKEND)")
     ap.add_argument("--llm-backend", default=None,
-                    choices=[None, "ollama", "groq", "deterministic"],
+                    choices=[None, "gemini", "ollama", "groq", "deterministic"],
                     help="LLM extraction backend (overrides NHPC_LLM_BACKEND)")
     ap.add_argument("--no-docling", action="store_true", help="disable Docling (use fallbacks)")
     ap.add_argument("--no-trace", action="store_true", help="disable the trace layer")

@@ -48,20 +48,48 @@ class NotWiredError(BackendError):
 # shared helpers
 # ---------------------------------------------------------------------------
 
+# Reasoning models (Qwen3, DeepSeek-R1, ...) prefix their answer with a chain-of-
+# thought block. Its prose can contain braces, which would poison a naive
+# first-'{' .. last-'}' slice, so strip these blocks before looking for JSON.
+_THINK_BLOCK = re.compile(r"<(think|thinking|reasoning)\b[^>]*>.*?</\1>",
+                          re.I | re.DOTALL)
+# An unterminated block (output truncated mid-thought) — drop everything up to the
+# opening tag's end so we never parse reasoning prose as data.
+_THINK_OPEN = re.compile(r"^.*?<(?:think|thinking|reasoning)\b[^>]*>", re.I | re.DOTALL)
+
+
 def extract_json(text: str) -> dict:
-    """Pull the first JSON object out of a model response; tolerate code fences."""
+    """
+    Pull the first JSON object out of a model response.
+
+    Tolerates code fences and the <think>...</think> blocks emitted by reasoning
+    models (Qwen3 via Ollama is the deployment target), which must be removed before
+    scanning for braces.
+    """
     if not text:
         raise BackendError("empty response")
+    text = _THINK_BLOCK.sub("", text)
+    if re.search(r"<(?:think|thinking|reasoning)\b", text, re.I):
+        # opening tag with no close: keep only what follows it
+        text = _THINK_OPEN.sub("", text, count=1)
     text = text.strip()
     text = re.sub(r"^```(?:json)?", "", text).strip()
     text = re.sub(r"```$", "", text).strip()
+    if not text:
+        raise BackendError("empty response after stripping reasoning block")
     try:
         return json.loads(text)
     except Exception:
         pass
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return json.loads(text[start:end + 1])
+    # Try every '{' as a candidate start and take the first that parses. A naive
+    # first-'{'..last-'}' slice breaks when leftover reasoning prose contains braces
+    # (e.g. a truncated <think> block).
+    for start in (i for i, ch in enumerate(text) if ch == "{"):
+        for end in (j for j in range(len(text) - 1, start, -1) if text[j] == "}"):
+            try:
+                return json.loads(text[start:end + 1])
+            except Exception:
+                continue
     raise BackendError("no JSON object in response")
 
 
@@ -231,6 +259,125 @@ class GroqLLM:
                     time.sleep(2 * (attempt + 1)); continue
                 raise BackendError(f"Groq request failed: {e}")
         raise BackendError("Groq request failed after retries (rate limit)")
+
+
+class GeminiLLM:
+    """
+    Cloud LLM via Google AI Studio's OpenAI-COMPATIBLE endpoint (Gemini 2.5 Flash).
+
+    Chosen for the build phase because Groq's free tier (30 rpm) throttled full-corpus
+    runs. Because Google exposes /chat/completions with OpenAI-style JSON mode, this
+    provider satisfies the same `complete_json` contract as GroqLLM and OllamaLLM —
+    switching backends changes one config value, never any extraction code.
+
+    Two Gemini-specific behaviours are handled here:
+
+    * THINKING. Gemini 2.5 Flash reasons before answering and, with a small output
+      budget, can spend the entire budget thinking and return an EMPTY message
+      (finish_reason="length", content=""). Span extraction is extraction, not
+      reasoning, so thinking is disabled by default (cfg.gemini_thinking_budget=0)
+      via `reasoning_effort: "none"`. An empty content is treated as a retryable
+      failure rather than being passed to extract_json as a silent success.
+    * The key travels as a Bearer token, from env only.
+
+    Build-phase only: document text is sent to Google's cloud. At deployment set
+    llm_backend=ollama with an on-prem Qwen3 14B — no downstream change.
+    """
+    kind = "gemini"
+    llm_is_deterministic = False
+
+    # Process-wide sliding-window limiter, shared across instances (see GroqLLM).
+    _call_times = []
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.model = cfg.gemini_model
+        self.base_url = cfg.gemini_base_url
+        self.rpm = max(1, int(getattr(cfg, "gemini_rpm", 60)))
+        self.name = f"gemini:{self.model}"
+
+    def model_for(self, op: str) -> str:
+        return self.model if op == "llm" else "unknown"
+
+    def _key(self):
+        k = self.cfg.gemini_api_key()
+        if not k:
+            raise BackendError(
+                f"llm_backend=gemini needs an API key in env "
+                f"${self.cfg.gemini_api_key_env} (or $GOOGLE_API_KEY)")
+        return k
+
+    def _throttle(self):
+        """Block until sending keeps us at/under gemini_rpm over the last 60s."""
+        import time
+        while True:
+            now = time.time()
+            GeminiLLM._call_times[:] = [t for t in GeminiLLM._call_times if now - t < 60.0]
+            if len(GeminiLLM._call_times) < self.rpm:
+                GeminiLLM._call_times.append(now)
+                return
+            wait = 60.0 - (now - GeminiLLM._call_times[0]) + 0.25
+            time.sleep(max(0.1, wait))
+
+    def complete_json(self, system: str, user: str, schema_hint=None) -> dict:
+        import time
+        body = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "temperature": 0,
+            "stream": False,
+            "response_format": {"type": "json_object"},
+            "max_tokens": int(getattr(self.cfg, "gemini_max_tokens", 8192)),
+        }
+        # Map the thinking budget onto the OpenAI-compat `reasoning_effort` knob.
+        budget = int(getattr(self.cfg, "gemini_thinking_budget", 0))
+        body["reasoning_effort"] = "none" if budget <= 0 else "low"
+
+        last_err = None
+        for attempt in range(6):
+            self._throttle()
+            req = urllib.request.Request(
+                self.base_url.rstrip("/") + "/chat/completions",
+                data=json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {self._key()}",
+                         "User-Agent": "NHPC-parliament-rag/1.0"})
+            try:
+                with urllib.request.urlopen(req, timeout=self.cfg.llm_timeout_s) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                choice = (data.get("choices") or [{}])[0]
+                content = (choice.get("message") or {}).get("content") or ""
+                if not content.strip():
+                    # Thinking consumed the budget, or the model returned nothing.
+                    last_err = (f"empty content (finish_reason="
+                                f"{choice.get('finish_reason')!r})")
+                    if attempt < 5:
+                        body["max_tokens"] = min(int(body["max_tokens"]) * 2, 32768)
+                        body["reasoning_effort"] = "none"
+                        time.sleep(1.0 + attempt)
+                        continue
+                    raise BackendError(f"Gemini returned {last_err}")
+                return extract_json(content)
+            except urllib.error.HTTPError as e:
+                detail = ""
+                try:
+                    detail = e.read().decode("utf-8", "replace")[:300]
+                except Exception:
+                    pass
+                if e.code == 429:
+                    ra = e.headers.get("Retry-After") if e.headers else None
+                    delay = float(ra) if (ra and ra.replace(".", "").isdigit()) else 5.0
+                    time.sleep(min(delay + 0.5, 65))
+                    continue
+                if e.code in (500, 502, 503, 504) and attempt < 5:
+                    time.sleep(2 * (attempt + 1)); continue
+                raise BackendError(f"Gemini request failed: HTTP {e.code} {detail}")
+            except urllib.error.URLError as e:
+                if attempt < 5:
+                    time.sleep(2 * (attempt + 1)); continue
+                raise BackendError(f"Gemini request failed: {e}")
+        raise BackendError(f"Gemini request failed after retries ({last_err})")
 
 
 class DeterministicLLMProvider:
@@ -553,6 +700,8 @@ def get_parser(cfg):
 def get_llm(cfg):
     """LLM provider for the extraction pass, independent of the parser backend."""
     _, lb = cfg.resolve_backends()
+    if lb == "gemini":
+        return GeminiLLM(cfg)
     if lb == "groq":
         return GroqLLM(cfg)
     if lb == "ollama":

@@ -168,6 +168,13 @@ class Pair:
     related_question_numbers: list = field(default_factory=list)
     tables: list = field(default_factory=list)     # list[TableOut]
     confidence: str = "high"
+    # [first_line, last_line] of the answer in the source, when the span extractor
+    # produced this pair. This is the ANSWER'S IDENTITY: two parts share an answer
+    # iff they point at the SAME span. Grouping must never be re-derived from
+    # answer_text — several distinct answer blocks can carry identical wording
+    # (11800: three separate "Does not pertain to NHPC." blocks answer a,b / d /
+    # e,f respectively and must stay three groups). None on the deterministic path.
+    answer_span: tuple | None = None
 
     def to_dict(self):
         return {

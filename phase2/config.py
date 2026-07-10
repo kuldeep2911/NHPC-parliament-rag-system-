@@ -69,9 +69,9 @@ class Config:
     parser_backend: str = field(default_factory=lambda: _env_str("NHPC_PARSER_BACKEND", ""))
     llm_backend: str = field(default_factory=lambda: _env_str("NHPC_LLM_BACKEND", ""))
 
-    # --- GROQ (OpenAI-compatible cloud LLM; llama3.3-70b for the build phase) -----
-    # Build-phase only (data leaves the network); at deployment switch llm_backend
-    # to a local/on-prem GPU running the same 70B. Key from env ONLY.
+    # --- GROQ (OpenAI-compatible cloud LLM; llama3.3-70b) -------------------------
+    # Superseded by Gemini for the build phase (Groq's 30 rpm free tier was the
+    # bottleneck), but kept as a fully working backend. Key from env ONLY.
     groq_base_url: str = field(default_factory=lambda: _env_str("GROQ_BASE_URL", "https://api.groq.com/openai/v1"))
     groq_model: str = field(default_factory=lambda: _env_str("GROQ_MODEL", "llama-3.3-70b-versatile"))
     groq_api_key_env: str = field(default_factory=lambda: _env_str("GROQ_API_KEY_ENV", "GROQ_API_KEY"))
@@ -79,6 +79,26 @@ class Config:
     # 30 req/min). The GroqLLM provider paces calls to stay under this, so EVERY
     # file is parsed by the LLM instead of falling back to deterministic on 429.
     groq_rpm: int = field(default_factory=lambda: int(_env_str("GROQ_RPM", "30")))
+
+    # --- GEMINI (build-phase cloud LLM; Google AI Studio) -------------------------
+    # Uses Google's OpenAI-COMPATIBLE endpoint so GeminiLLM reuses the same
+    # chat/completions + JSON-mode contract as Groq and Ollama; nothing downstream
+    # changes when the backend switches.
+    #
+    # Build-phase only: document text is sent to Google's cloud. Not for real NHPC
+    # data. At deployment set llm_backend=ollama with an on-prem Qwen3 14B.
+    gemini_base_url: str = field(default_factory=lambda: _env_str(
+        "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
+    gemini_model: str = field(default_factory=lambda: _env_str("GEMINI_MODEL", "gemini-2.5-flash"))
+    gemini_api_key_env: str = field(default_factory=lambda: _env_str("GEMINI_API_KEY_ENV", "GEMINI_API_KEY"))
+    # AI Studio's paid tier allows far more than Groq's free 30/min; pace anyway so a
+    # burst never 429s and silently drops a file to the deterministic fallback.
+    gemini_rpm: int = field(default_factory=lambda: int(_env_str("GEMINI_RPM", "60")))
+    # Gemini 2.5 Flash is a THINKING model: it can spend the entire output budget on
+    # internal reasoning and return an empty message. Span extraction is extraction,
+    # not reasoning, so thinking is off by default. Raise it if you ever want it.
+    gemini_thinking_budget: int = field(default_factory=lambda: int(_env_str("GEMINI_THINKING_BUDGET", "0")))
+    gemini_max_tokens: int = field(default_factory=lambda: int(_env_str("GEMINI_MAX_TOKENS", "8192")))
 
     # --- LOCAL provider settings (OpenAI-compatible on-prem server) -------
     # Local Ollama LLM model name — a SINGLE config value, never hardcoded in logic.
@@ -164,6 +184,15 @@ class Config:
         """Groq API key from env (build phase). None if unset."""
         return os.environ.get(self.groq_api_key_env)
 
+    def gemini_api_key(self):
+        """
+        Gemini API key from env (build phase). None if unset.
+        Accepts GOOGLE_API_KEY as a fallback — Google AI Studio's own docs use both
+        names — so a key pasted under either variable just works.
+        """
+        return (os.environ.get(self.gemini_api_key_env)
+                or os.environ.get("GOOGLE_API_KEY"))
+
     def nvidia_urls(self):
         """Return (ocr_url, page_elements_url, table_structure_url) for the mode."""
         if (self.nvidia_mode or "cloud").lower() == "cloud":
@@ -205,6 +234,9 @@ class Config:
             errs.append("llm_backend=ollama but no NHPC_OLLAMA_BASE_URL set")
         if lb == "groq" and not self.groq_api_key():
             errs.append("llm_backend=groq but no API key in env $" + self.groq_api_key_env)
+        if lb == "gemini" and not self.gemini_api_key():
+            errs.append("llm_backend=gemini but no API key in env $"
+                        + self.gemini_api_key_env + " (or $GOOGLE_API_KEY)")
         return errs
 
     # --- trace / observability -------------------------------------------
