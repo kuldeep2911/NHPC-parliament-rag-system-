@@ -90,45 +90,72 @@ def schema(cur):
             ORDER BY ordinal_position""", (t,), maxw=34)
 
 
-def one_doc(cur, qid):
+def one_doc(cur, ident):
+    """
+    `ident` is a doc_key ('2023-jan-apr/lok_sabha/1894') or a bare diary number.
+
+    A bare number can match SEVERAL documents -- the diary number is reused across
+    sessions for different questions -- so we list the matches and ask you to pick.
+    """
+    cur.execute("SELECT doc_key FROM diaries WHERE doc_key = %s", (ident,))
+    hit = cur.fetchone()
+    if hit:
+        key = hit[0]
+    else:
+        cur.execute("SELECT doc_key FROM diaries WHERE question_id = %s ORDER BY doc_key",
+                    (ident,))
+        keys = [r[0] for r in cur.fetchall()]
+        if not keys:
+            print(f"  no diary matching {ident!r}")
+            return
+        if len(keys) > 1:
+            print(f"  diary number {ident!r} matches {len(keys)} DIFFERENT documents "
+                  f"(the number is reused across sessions):")
+            for k in keys:
+                print(f"     --doc {k}")
+            return
+        key = keys[0]
+
     print("=" * 78)
-    print(f"DIARY {qid}")
+    print(f"DIARY {key}")
     print("=" * 78)
     cur.execute("""
         SELECT question_id, house, session, session_year, subject, starred,
                reply_format, is_nhpc_relevant, needs_review, extraction_flags,
                page_count, file_sha256, answer_file_path
-        FROM diaries WHERE question_id=%s""", (qid,))
+        FROM diaries WHERE doc_key=%s""", (key,))
     row = cur.fetchone()
-    if not row:
-        print(f"  no diary with question_id={qid!r}")
-        return
     cols = [d.name for d in cur.description]
     for c, v in zip(cols, row):
         print(f"  {c:22}: {v}")
 
     print("\n  SUB-QUESTIONS (the embedding unit)")
     _table(cur, """
-        SELECT sub_question_id, part_label, answer_group_id,
+        SELECT sub_question_local AS sub_question, part_label,
+               (SELECT answer_group_local FROM answer_groups g
+                WHERE g.answer_group_id = sq.answer_group_id) AS answer_group,
                (embedding IS NOT NULL) AS embedded, embedding_model,
-               left(question_text, 60) AS question
-        FROM sub_questions WHERE question_id=%s ORDER BY sub_question_id""", (qid,))
+               left(question_text, 54) AS question
+        FROM sub_questions sq WHERE doc_key=%s ORDER BY sub_question_local""", (key,))
 
     print("\n  ANSWER GROUPS (answer stored once; parts may share)")
     _table(cur, """
-        SELECT answer_group_id, answers_parts, answer_type,
+        SELECT answer_group_local AS answer_group, answers_parts, answer_type,
                left(answer_text, 54) AS answer_text
-        FROM answer_groups WHERE question_id=%s ORDER BY answer_group_id""", (qid,))
+        FROM answer_groups WHERE doc_key=%s ORDER BY answer_group_local""", (key,))
 
     print("\n  TABLES (nested inside their answer group)")
     _table(cur, """
-        SELECT t.table_id, t.answer_group_id, count(r.row_id) AS n_rows
+        SELECT t.table_local AS table_id,
+               (SELECT answer_group_local FROM answer_groups g
+                WHERE g.answer_group_id = t.answer_group_id) AS answer_group,
+               count(r.row_id) AS n_rows
         FROM answer_tables t LEFT JOIN answer_table_rows r USING (table_id)
-        WHERE t.question_id=%s GROUP BY 1,2 ORDER BY 1""", (qid,))
+        WHERE t.doc_key=%s GROUP BY 1,2 ORDER BY 1""", (key,))
 
-    cur.execute("""SELECT t.table_id, r.cells FROM answer_tables t
+    cur.execute("""SELECT t.table_local, r.cells FROM answer_tables t
                    JOIN answer_table_rows r USING (table_id)
-                   WHERE t.question_id=%s ORDER BY t.table_id, r.row_index""", (qid,))
+                   WHERE t.doc_key=%s ORDER BY t.table_local, r.row_index""", (key,))
     rows = cur.fetchall()
     if rows:
         print("\n  TABLE CONTENT")
@@ -142,7 +169,7 @@ def one_doc(cur, qid):
     print("\n  ANNEXURES (path capture only)")
     _table(cur, """
         SELECT ref_label, referenced_in_parts, file_present, match_confidence, file_path
-        FROM annexures WHERE question_id=%s""", (qid,))
+        FROM annexures WHERE doc_key=%s""", (key,))
 
 
 def search(cur, q, k):
@@ -150,36 +177,53 @@ def search(cur, q, k):
     print(f"KEYWORD SEARCH (full-text): {q!r}")
     print("=" * 78)
     _table(cur, """
-        SELECT sq.sub_question_id, d.house, d.session,
-               ts_rank(sq.question_tsv, websearch_to_tsquery('english', %s)) AS rank,
-               left(sq.question_text, 56) AS question
-        FROM sub_questions sq JOIN diaries d USING (question_id)
+        SELECT sq.sub_question_local AS sub_question, d.session, d.house,
+               round(ts_rank(sq.question_tsv,
+                             websearch_to_tsquery('english', %s))::numeric, 4) AS rank,
+               left(sq.question_text, 52) AS question
+        FROM sub_questions sq JOIN diaries d USING (doc_key)
         WHERE sq.question_tsv @@ websearch_to_tsquery('english', %s)
         ORDER BY rank DESC LIMIT %s""", (q, q, k))
 
 
 def similar(cur, sqid, k):
-    print("=" * 78)
-    print(f"VECTOR SIMILARITY (cosine, via the halfvec HNSW index): {sqid}")
-    print("=" * 78)
-    cur.execute("SELECT question_text FROM sub_questions WHERE sub_question_id=%s", (sqid,))
+    """`sqid` is a full sub_question_id or a Phase-2 local id ('8773_d')."""
+    cur.execute("SELECT sub_question_id, question_text FROM sub_questions "
+                "WHERE sub_question_id=%s", (sqid,))
     row = cur.fetchone()
     if not row:
-        print(f"  no sub_question {sqid!r}")
-        return
-    print(f"  seed: {row[0][:70]}\n")
+        cur.execute("SELECT sub_question_id, question_text FROM sub_questions "
+                    "WHERE sub_question_local=%s ORDER BY sub_question_id", (sqid,))
+        hits = cur.fetchall()
+        if not hits:
+            print(f"  no sub_question {sqid!r}")
+            return
+        if len(hits) > 1:
+            print(f"  {sqid!r} matches {len(hits)} documents (diary numbers repeat "
+                  f"across sessions); use the full id:")
+            for h, _ in hits:
+                print(f"     --similar {h}")
+            return
+        row = hits[0]
+    full_id, seed_text = row
+
+    print("=" * 78)
+    print(f"VECTOR SIMILARITY (cosine, via the halfvec HNSW index)")
+    print("=" * 78)
+    print(f"  seed: {full_id}")
+    print(f"        {seed_text[:70]}\n")
     _table(cur, """
-        SELECT sq.sub_question_id,
+        SELECT sq.sub_question_local AS sub_question, d.session, d.house,
                round((sq.embedding::halfvec(2048) <=>
                      (SELECT embedding::halfvec(2048) FROM sub_questions
                       WHERE sub_question_id=%s))::numeric, 4) AS cos_dist,
-               left(sq.question_text, 54) AS question
-        FROM sub_questions sq
+               left(sq.question_text, 46) AS question
+        FROM sub_questions sq JOIN diaries d USING (doc_key)
         WHERE sq.embedding IS NOT NULL
         ORDER BY sq.embedding::halfvec(2048) <=>
                  (SELECT embedding::halfvec(2048) FROM sub_questions
                   WHERE sub_question_id=%s)
-        LIMIT %s""", (sqid, sqid, k))
+        LIMIT %s""", (full_id, full_id, k))
 
 
 def main(argv=None):

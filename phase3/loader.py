@@ -86,9 +86,35 @@ def _ts(val):
         return None
 
 
+def doc_key(doc, rel_path):
+    """
+    The GLOBALLY UNIQUE key of a document: '<session>/<house>/<question_id>'.
+
+    question_id alone is NOT unique -- it is the parliament diary number, and the same
+    number is reused in later sessions for a completely different question (diary 1894
+    exists in both 2023-jan-apr/lok_sabha and 2025-monsoon/rajya_sabha). Keying on it
+    made the second document UPSERT over the first and silently destroy it: 9 diaries,
+    25 sub_questions and 15 answer_groups were lost on the full corpus.
+
+    This equals the folder path under organized/, so a row traces straight back to its
+    file. Falls back to the on-disk relative path if a field is missing.
+    """
+    s, h, q = doc.get("session"), doc.get("house"), doc.get("question_id")
+    if s and h and q:
+        return f"{s}/{h}/{q}"
+    return rel_path
+
+
+def _ns(key, local_id):
+    """Namespace a Phase-2 id into a globally unique one: '<doc_key>#<local id>'.
+    The Phase-2 id is kept alongside in a *_local column, so nothing is lost."""
+    return f"{key}#{local_id}"
+
+
 def _diary_row(doc, rel_path):
     fm = doc.get("file_metadata") or {}
     return {
+        "doc_key": doc_key(doc, rel_path),
         "question_id": doc.get("question_id"),
         "diary_numbers": doc.get("diary_numbers") or [],
         "house": doc.get("house"),
@@ -155,6 +181,7 @@ def load_document(conn, doc, rel_path, force=False):
     """
     warnings = validate(doc)
     qid = doc.get("question_id")
+    key = doc_key(doc, rel_path)     # '<session>/<house>/<question_id>' — globally unique
     counts = {"sub_questions": 0, "answer_groups": 0, "answer_tables": 0,
               "answer_table_rows": 0, "annexures": 0, "diary_level_tables": 0}
 
@@ -164,12 +191,14 @@ def load_document(conn, doc, rel_path, force=False):
     with conn.transaction():
         with conn.cursor() as cur:
             # 1. diary
-            _upsert(cur, "diaries", "question_id",
+            _upsert(cur, "diaries", "doc_key",
                     [_diary_row(doc, rel_path)], _DIARY_COLS)
 
             # 2. answer_groups (before sub_questions: FK target)
             g_rows = [{
-                "answer_group_id": g.get("answer_group_id"),
+                "answer_group_id": _ns(key, g["answer_group_id"]),
+                "answer_group_local": g["answer_group_id"],
+                "doc_key": key,
                 "question_id": qid,
                 "answers_parts": g.get("answers_parts") or [],
                 "answer_text": g.get("answer_text"),
@@ -182,34 +211,36 @@ def load_document(conn, doc, rel_path, force=False):
                 "confidence": g.get("confidence"),
             } for g in groups if g.get("answer_group_id")]
             counts["answer_groups"] = _upsert(
-                cur, "answer_groups", "answer_group_id", g_rows, list(g_rows[0]) if g_rows else [])
+                cur, "answer_groups", "answer_group_id", g_rows,
+                list(g_rows[0]) if g_rows else [])
 
-            # 3. sub_questions. A dangling answer_group_id cannot satisfy the FK, so we
-            #    still load the sub-question but point it at... nothing is possible:
-            #    the column is NOT NULL. Rather than DROP the record (policy: everything
-            #    loads), we attach it to a synthesised placeholder group so the row is
-            #    present and retrievable, and the warning tells you to fix Phase 2.
+            # 3. sub_questions. A dangling answer_group_id cannot satisfy the FK. Policy
+            #    is that EVERYTHING loads, so rather than drop the sub-question we attach
+            #    it to a synthesised placeholder group; the warning says to fix Phase 2.
             sq_rows = []
             for sq in doc.get("sub_questions") or []:
                 if not sq.get("sub_question_id"):
                     continue
-                agid = sq.get("answer_group_id")
-                if agid not in gids:
-                    agid = f"{qid}_gorphan"
+                local_g = sq.get("answer_group_id")
+                if local_g not in gids:
+                    local_g = f"{qid}_gorphan"
                     _upsert(cur, "answer_groups", "answer_group_id", [{
-                        "answer_group_id": agid, "question_id": qid,
+                        "answer_group_id": _ns(key, local_g),
+                        "answer_group_local": local_g,
+                        "doc_key": key, "question_id": qid,
                         "answers_parts": [], "answer_text": None, "answer_type": None,
                         "answer_language": None, "answer_is_table": False,
-                        "answer_blocks": "[]", "annexure_refs": [],
-                        "confidence": "low",
-                    }], ["answer_group_id", "question_id", "answers_parts", "answer_text",
-                         "answer_type", "answer_language", "answer_is_table",
-                         "answer_blocks", "annexure_refs", "confidence"])
-                    gids.add(agid)
+                        "answer_blocks": "[]", "annexure_refs": [], "confidence": "low",
+                    }], ["answer_group_id", "answer_group_local", "doc_key", "question_id",
+                         "answers_parts", "answer_text", "answer_type", "answer_language",
+                         "answer_is_table", "answer_blocks", "annexure_refs", "confidence"])
+                    gids.add(local_g)
                 sq_rows.append({
-                    "sub_question_id": sq["sub_question_id"],
+                    "sub_question_id": _ns(key, sq["sub_question_id"]),
+                    "sub_question_local": sq["sub_question_id"],
+                    "doc_key": key,
                     "question_id": qid,
-                    "answer_group_id": agid,
+                    "answer_group_id": _ns(key, local_g),
                     "part_label": sq.get("part_label"),
                     "question_text": sq.get("question_text") or "",
                     "question_language": sq.get("question_language"),
@@ -219,19 +250,21 @@ def load_document(conn, doc, rel_path, force=False):
                 cur, "sub_questions", "sub_question_id", sq_rows,
                 list(sq_rows[0]) if sq_rows else [])
 
-            # --force: invalidate existing vectors so the embedder re-does them
-            if force and qid:
+            # --force: invalidate this document's vectors so the embedder redoes them
+            if force:
                 cur.execute(
                     "UPDATE sub_questions SET embedding = NULL, embedding_model = NULL, "
-                    "embedding_created_at = NULL WHERE question_id = %s", (qid,))
+                    "embedding_created_at = NULL WHERE doc_key = %s", (key,))
 
             # 4. tables (nested INSIDE their answer group) + rows
             t_rows, r_rows = [], []
             for g in groups:
                 for t in (g.get("tables") or []):
                     t_rows.append({
-                        "table_id": t.get("table_id"),
-                        "answer_group_id": g.get("answer_group_id"),
+                        "table_id": _ns(key, t["table_id"]),
+                        "table_local": t["table_id"],
+                        "answer_group_id": _ns(key, g["answer_group_id"]),
+                        "doc_key": key,
                         "question_id": qid,
                         "caption": t.get("caption"),
                         "table_role": t.get("table_role"),
@@ -242,8 +275,9 @@ def load_document(conn, doc, rel_path, force=False):
                     })
                     for i, r in enumerate(t.get("rows") or [], start=1):
                         r_rows.append({
-                            "row_id": r.get("row_id"),
-                            "table_id": t.get("table_id"),
+                            "row_id": _ns(key, r["row_id"]),
+                            "row_local": r["row_id"],
+                            "table_id": _ns(key, t["table_id"]),
                             "row_index": i,
                             "cells": json.dumps(r.get("cells") or {}, ensure_ascii=False),
                             "row_language": r.get("row_language"),
@@ -255,11 +289,12 @@ def load_document(conn, doc, rel_path, force=False):
             counts["answer_table_rows"] = _upsert(
                 cur, "answer_table_rows", "row_id", r_rows, list(r_rows[0]) if r_rows else [])
 
-            # 5. diary-level tables (rare; none in the corpus today)
+            # 5. diary-level tables (rare)
             dt_rows, dr_rows = [], []
             for t in (doc.get("diary_level_tables") or []):
                 dt_rows.append({
-                    "table_id": t.get("table_id"), "question_id": qid,
+                    "table_id": _ns(key, t["table_id"]), "table_local": t["table_id"],
+                    "doc_key": key, "question_id": qid,
                     "caption": t.get("caption"), "table_role": t.get("table_role"),
                     "answer_is_table": t.get("answer_is_table"),
                     "columns": json.dumps(t.get("columns") or [], ensure_ascii=False),
@@ -268,8 +303,8 @@ def load_document(conn, doc, rel_path, force=False):
                 })
                 for i, r in enumerate(t.get("rows") or [], start=1):
                     dr_rows.append({
-                        "row_id": r.get("row_id"), "table_id": t.get("table_id"),
-                        "row_index": i,
+                        "row_id": _ns(key, r["row_id"]), "row_local": r["row_id"],
+                        "table_id": _ns(key, t["table_id"]), "row_index": i,
                         "cells": json.dumps(r.get("cells") or {}, ensure_ascii=False),
                         "row_language": r.get("row_language"),
                         "nl_rendering": r.get("nl_rendering"),
@@ -281,14 +316,15 @@ def load_document(conn, doc, rel_path, force=False):
             _upsert(cur, "diary_level_table_rows", "row_id", dr_rows,
                     list(dr_rows[0]) if dr_rows else [])
 
-            # 6. annexures — PK synthesised deterministically (JSON has no id)
+            # 6. annexures — PK synthesised deterministically (the JSON has no id)
             a_rows = []
             for a in (doc.get("annexures") or []):
                 label = a.get("ref_label")
                 if not label:
                     continue
                 a_rows.append({
-                    "annexure_id": f"{qid}::{label}",
+                    "annexure_id": _ns(key, label),
+                    "doc_key": key,
                     "question_id": qid,
                     "ref_label": label,
                     "referenced_in_parts": a.get("referenced_in_parts") or [],
