@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NHPC — Parliamentary Q&A Retrieval</title>
+<style>
+  :root { --bd:#d9dee5; --mut:#5b6673; --bg:#f6f8fa; --ok:#0a7a3d; --warn:#a15c00; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.55 system-ui, "Segoe UI", Roboto, sans-serif; margin:0;
+         color:#16202b; background:var(--bg); }
+  header { background:#0d2b45; color:#fff; padding:14px 22px; }
+  header h1 { margin:0; font-size:17px; font-weight:600; }
+  header .sub { font-size:12px; opacity:.75; margin-top:2px; }
+  main { max-width: 1000px; margin: 22px auto; padding: 0 16px; }
+  .bar { display:flex; gap:8px; }
+  input[type=text] { flex:1; padding:11px 13px; border:1px solid var(--bd);
+                     border-radius:7px; font-size:15px; background:#fff; }
+  button { padding:11px 18px; border:0; border-radius:7px; background:#0d2b45;
+           color:#fff; font-size:14px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .who { margin-top:8px; font-size:12px; color:var(--mut); display:flex; gap:14px; }
+  .who input { border:1px solid var(--bd); border-radius:5px; padding:3px 7px;
+               font-size:12px; width:110px; }
+  .diag { margin:16px 0; padding:10px 13px; background:#fff; border:1px solid var(--bd);
+          border-radius:7px; font-size:12.5px; color:var(--mut); }
+  .diag b { color:#16202b; }
+  .card { background:#fff; border:1px solid var(--bd); border-radius:9px;
+          padding:15px 17px; margin-bottom:13px; }
+  .card h3 { margin:0 0 4px; font-size:15px; }
+  .meta { font-size:12px; color:var(--mut); margin-bottom:9px; }
+  .q { font-weight:600; margin-bottom:6px; }
+  .a { white-space:pre-wrap; background:#fafbfc; border-left:3px solid #c9d2dc;
+       padding:8px 11px; border-radius:0 5px 5px 0; margin-bottom:10px; }
+  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:20px;
+         background:#eef2f6; color:var(--mut); margin-right:5px; }
+  .files a, .files span { display:inline-block; margin:0 7px 6px 0; font-size:13px;
+         padding:5px 11px; border:1px solid var(--bd); border-radius:6px;
+         background:#fff; text-decoration:none; color:#0d2b45; }
+  .files span.na { color:var(--warn); border-style:dashed; cursor:not-allowed; }
+  .sig { font-size:11.5px; color:var(--mut); margin-top:8px;
+         border-top:1px dashed var(--bd); padding-top:7px; }
+  .fb button { background:#fff; color:#16202b; border:1px solid var(--bd);
+               padding:4px 12px; font-size:14px; margin-right:6px; }
+  .fb button.on { background:#0d2b45; color:#fff; border-color:#0d2b45; }
+  .fb input { border:1px solid var(--bd); border-radius:5px; padding:4px 8px;
+              font-size:12px; width:230px; }
+  .empty { padding:26px; text-align:center; color:var(--mut); }
+</style>
+</head>
+<body>
+<header>
+  <h1>NHPC — Parliamentary Q&amp;A Retrieval</h1>
+  <div class="sub">Past questions and the answers already given. Results are retrieved, not generated.</div>
+</header>
+
+<main>
+  <div class="bar">
+    <input type="text" id="q" placeholder="e.g. electricity dues owed by J&amp;K  •  जलविद्युत परियोजना की जानकारी"
+           autofocus>
+    <button id="go">Search</button>
+  </div>
+  <div class="who">
+    <span>identity (set by your proxy in production):</span>
+    <label>user <input id="uid" value="officer1"></label>
+    <label>role <input id="role" value="officer"></label>
+  </div>
+
+  <div id="diag" class="diag" hidden></div>
+  <div id="out"></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let RUN_ID = null;
+
+function headers() {
+  return { "Content-Type": "application/json",
+           "X-User-Id": $("#uid").value.trim() || "anonymous",
+           "X-User-Role": $("#role").value.trim() };
+}
+
+async function search() {
+  const q = $("#q").value.trim();
+  if (!q) return;
+  $("#go").disabled = true;
+  $("#out").innerHTML = '<div class="empty">Searching…</div>';
+  $("#diag").hidden = true;
+  try {
+    const r = await fetch("/query", { method:"POST", headers: headers(),
+                                      body: JSON.stringify({ query: q }) });
+    if (!r.ok) { const e = await r.json();
+                 $("#out").innerHTML = `<div class="empty">${r.status}: ${e.detail}</div>`;
+                 return; }
+    const d = await r.json();
+    RUN_ID = d.run_id;
+    render(d);
+  } finally { $("#go").disabled = false; }
+}
+
+function render(d) {
+  const g = d.diagnostics;
+  $("#diag").hidden = false;
+  $("#diag").innerHTML =
+    `<b>${d.results.length}</b> results · language <b>${d.language}</b> `
+    + `(detected for processing — it never filters the search) · `
+    + `entities ${d.entities.length ? "<b>"+d.entities.join(", ")+"</b>" : "none"} · `
+    + `retrievers fired <b>${(g.retrievers_fired||[]).join("+") || "—"}</b> of `
+    + `${(g.retrievers_eligible||[]).length} eligible`
+    + (g.widened ? ` · <b>widened</b> (${g.widen_reason})` : "")
+    + (g.rerank_failed ? ` · <b style="color:#a15c00">reranker unavailable — showing fusion order</b>` : "")
+    + ` · ${g.timings_ms.total} ms`
+    + `<br><i>Scores below are heuristics for triage, not a guarantee of correctness.</i>`;
+
+  if (!d.results.length) {
+    $("#out").innerHTML = '<div class="empty">No matching past questions.</div>';
+    return;
+  }
+
+  $("#out").innerHTML = d.results.map(r => {
+    const files = [
+      r.reply_file.available
+        ? `<a href="/file?doc_key=${encodeURIComponent(r.doc_key)}&file_kind=reply&run_id=${RUN_ID}" target="_blank">📄 Reply</a>`
+        : `<span class="na">Reply unavailable</span>`,
+      ...r.annexures.map(a => a.available
+        ? `<a href="/file?doc_key=${encodeURIComponent(r.doc_key)}&file_kind=annexure&ref_label=${encodeURIComponent(a.ref_label)}&run_id=${RUN_ID}" target="_blank">📎 ${a.ref_label}</a>`
+        : `<span class="na" title="referenced in the reply, but the file was never found">📎 ${a.ref_label} — ${a.status}</span>`)
+    ].join("");
+
+    const s = r.signals;
+    return `<div class="card" data-doc="${r.doc_key}">
+      <h3>#${r.rank} · ${r.subject || "(no subject)"}</h3>
+      <div class="meta">${r.house} · ${r.session} · diary ${r.diary_number}
+        <span class="tag">${r.answer_type}</span>
+        ${r.starred ? '<span class="tag">starred</span>' : ""}
+        ${r.needs_review ? '<span class="tag">flagged in parsing</span>' : ""}
+      </div>
+      <div class="q">(${r.part_label}) ${esc(r.question_text)}</div>
+      <div class="a">${esc(r.answer_text || "(no answer text)")}</div>
+      <div class="files">${files}</div>
+      <div class="sig">rrf ${s.rrf_score} · rerank ${s.rerank_logit ?? "—"}
+        (moved ${s.rerank_movement > 0 ? "+" : ""}${s.rerank_movement}) ·
+        found by ${s.retrievers.join("+")} · agreement ${s.agreement}</div>
+      <div class="sig fb">
+        <button onclick="vote(this,'up')">👍</button>
+        <button onclick="vote(this,'down')">👎</button>
+        <input placeholder="why? (optional)">
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function vote(btn, verdict) {
+  const card = btn.closest(".card");
+  const doc_key = card.dataset.doc;
+  const reason = card.querySelector(".fb input").value.trim() || null;
+  const r = await fetch("/feedback", { method:"POST", headers: headers(),
+    body: JSON.stringify({ run_id: RUN_ID, doc_key, verdict, reason }) });
+  if (r.ok) {
+    // a repeat vote UPDATES the previous one — reflect that in the UI
+    card.querySelectorAll(".fb button").forEach(b => b.classList.remove("on"));
+    btn.classList.add("on");
+  }
+}
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML; }
+
+$("#go").onclick = search;
+$("#q").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+</script>
+</body>
+</html>

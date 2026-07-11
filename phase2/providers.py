@@ -32,6 +32,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -98,6 +99,86 @@ def _b64(image_bytes: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
+# complete_text — free-form prose completion
+#
+# The extraction pipeline only ever needs complete_json(); this sibling exists because
+# some callers want PROSE (a drafted answer, a summary) rather than a JSON object.
+#
+# It is GENERIC on purpose. This module knows nothing about who calls it -- there is no
+# retrieval, prompt, or citation logic here, and nothing in phase2 imports phase4 (which
+# would be a cycle). The caller owns its prompts; the provider only owns the transport.
+#
+# Every cloud backend here (Gemini / Groq / Ollama) speaks the OpenAI-compatible
+# /chat/completions API, so one mixin serves all three.
+# ---------------------------------------------------------------------------
+
+class OpenAICompatTextMixin:
+    """Adds complete_text() to any provider exposing .base_url, .model and a key."""
+
+    def complete_text(self, system: str, user: str, max_tokens: int = 1200,
+                      temperature: float = 0.0) -> str:
+        body = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "temperature": temperature,
+            "stream": False,
+            "max_tokens": int(max_tokens),
+        }
+        # Gemini 2.5 Flash is a thinking model: without this it can spend the whole
+        # budget reasoning and return an empty message.
+        if getattr(self, "kind", "") == "gemini":
+            budget = int(getattr(self.cfg, "gemini_thinking_budget", 0))
+            body["reasoning_effort"] = "none" if budget <= 0 else "low"
+
+        headers = {"Content-Type": "application/json",
+                   "User-Agent": "NHPC-parliament-rag/1.0"}
+        key = self._key() if hasattr(self, "_key") else None
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+
+        last = None
+        for attempt in range(5):
+            if hasattr(self, "_throttle"):
+                self._throttle()
+            req = urllib.request.Request(
+                self.base_url.rstrip("/") + "/chat/completions",
+                data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=self.cfg.llm_timeout_s) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                choice = (data.get("choices") or [{}])[0]
+                text = (choice.get("message") or {}).get("content") or ""
+                if not text.strip():
+                    last = f"empty content (finish_reason={choice.get('finish_reason')!r})"
+                    body["max_tokens"] = min(int(body["max_tokens"]) * 2, 32768)
+                    time.sleep(1.0 + attempt)
+                    continue
+                return _strip_reasoning(text)
+            except urllib.error.HTTPError as e:
+                detail = ""
+                try:
+                    detail = e.read().decode("utf-8", "replace")[:200]
+                except Exception:
+                    pass
+                last = f"HTTP {e.code} {detail}"
+                if e.code == 429 or 500 <= e.code < 600:
+                    time.sleep(min(2 ** attempt, 30))
+                    continue
+                raise BackendError(f"complete_text failed: {last}")
+            except Exception as e:      # noqa: BLE001
+                last = f"{type(e).__name__}: {e}"
+                time.sleep(min(2 ** attempt, 30))
+        raise BackendError(f"complete_text failed after retries — {last}")
+
+
+def _strip_reasoning(text: str) -> str:
+    """Drop a <think>…</think> block (Qwen3 and other reasoning models emit one)."""
+    return _THINK_BLOCK.sub("", text).strip()
+
+
+# ---------------------------------------------------------------------------
 # Deterministic LLM path (no network) — passthrough of a precomputed result
 # ---------------------------------------------------------------------------
 
@@ -124,7 +205,7 @@ class DeterministicLLM:
 # OLLAMA LLM — the local extraction model (llama3.2:3b), independent of the parser
 # ---------------------------------------------------------------------------
 
-class OllamaLLM:
+class OllamaLLM(OpenAICompatTextMixin):
     """
     LLM-only provider for the extraction pass, hitting a local Ollama server's
     OpenAI-compatible /v1/chat/completions. Model name and base URL are single
@@ -170,7 +251,7 @@ class OllamaLLM:
         return extract_json(data["choices"][0]["message"]["content"])
 
 
-class GroqLLM:
+class GroqLLM(OpenAICompatTextMixin):
     """
     Cloud LLM via Groq's OpenAI-compatible API (llama-3.3-70b for the build phase).
     A 70B model groups multi-part Q&A far more reliably than the local 3B. Key from
@@ -261,7 +342,7 @@ class GroqLLM:
         raise BackendError("Groq request failed after retries (rate limit)")
 
 
-class GeminiLLM:
+class GeminiLLM(OpenAICompatTextMixin):
     """
     Cloud LLM via Google AI Studio's OpenAI-COMPATIBLE endpoint (Gemini 2.5 Flash).
 
