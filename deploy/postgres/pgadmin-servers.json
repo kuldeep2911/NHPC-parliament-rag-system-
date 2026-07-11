@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "NHPC Phase 3",
+      "Group": "NHPC",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "nhpc",
+      "Username": "nhpc",
+      "SSLMode": "prefer",
+      "Comment": "Phase-3 parliamentary Q&A store (Postgres 16 + pgvector). Password is POSTGRES_PASSWORD from deploy/postgres/.env"
+    }
+  }
+}

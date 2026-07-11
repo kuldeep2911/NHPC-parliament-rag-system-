@@ -1,0 +1,67 @@
+# Postgres 16 + pgvector for NHPC Phase 3.
+#
+# Single-server on-prem deployment: the same image and migrations run locally (dev)
+# and on the NHPC server. Versions are PINNED for reproducibility.
+#
+#   cd deploy/postgres
+#   cp .env.postgres.example .env     # then set a real POSTGRES_PASSWORD
+#   docker compose up -d
+#   docker compose ps                 # healthy?
+#
+# The pipeline connects with PHASE3_DB_DSN from the PROJECT-ROOT .env, e.g.
+#   PHASE3_DB_DSN=postgresql://nhpc:<password>@localhost:5433/nhpc
+#
+# Port 5433 (not 5432) so this never collides with an existing local Postgres.
+# Air-gapped server: mirror pgvector/pgvector:pg16 into your internal registry first.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16     # Postgres 16 with the pgvector extension built in
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nhpc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-nhpc}
+      # Deterministic, UTF-8 everywhere: parliamentary replies contain Devanagari.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - nhpc_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nhpc} -d ${POSTGRES_DB:-nhpc}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    # pgvector HNSW builds want working memory; raise if you index a much larger corpus.
+    command:
+      - "postgres"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      - "-c"
+      - "max_parallel_maintenance_workers=2"
+
+  # Browser DB admin UI — click through tables, run SQL, view rows.
+  # Optional: `docker compose up -d pgadmin` (or omit to run Postgres alone).
+  # Local dev convenience only; do NOT expose this port on the on-prem server.
+  pgadmin:
+    image: dpage/pgadmin4:8.14
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@nhpc.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"          # skip the login-per-user flow
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - nhpc_pgadmin:/var/lib/pgadmin
+      # pre-registers the 'NHPC Phase 3' server so it appears without manual setup
+      - ./pgadmin-servers.json:/pgadmin4/servers.json:ro
+    restart: unless-stopped
+
+volumes:
+  nhpc_pgdata:
+  nhpc_pgadmin:
