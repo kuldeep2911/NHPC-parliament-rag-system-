@@ -1,0 +1,48 @@
+# Retrieval API + officer UI.
+#
+#   sudo systemctl enable --now nhpc-api
+#   journalctl -u nhpc-api -f
+#
+# ⚠️ AUTHENTICATION. This service trusts the X-User-Id / X-User-Role headers, which the
+# reverse proxy in front of it is expected to set after authenticating the officer. It
+# therefore binds to 127.0.0.1 ONLY -- if it were exposed directly, those headers would be
+# self-asserted and the RBAC would be worthless. Put nginx (or the org's SSO proxy) in
+# front and let it terminate TLS and set the identity headers.
+
+[Unit]
+Description=NHPC parliamentary Q&A — retrieval API
+Documentation=file:///opt/nhpc/README.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nhpc
+Group=nhpc
+WorkingDirectory=/opt/nhpc
+
+EnvironmentFile=/opt/nhpc/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=NHPC_LOG_JSON=1
+# Loopback only. The proxy is the only thing that may reach it.
+Environment=PHASE4_API_HOST=127.0.0.1
+Environment=PHASE4_API_PORT=8099
+
+ExecStart=/opt/nhpc/.venv/bin/python -m nhpc_qa.cli serve
+
+Restart=always
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# --- hardening -------------------------------------------------------------
+# The API is READ-ONLY on the corpus: it queries the DB and streams files out of
+# organized/. It has no reason to write anywhere in the data tree, so it gets no
+# ReadWritePaths at all -- the whole filesystem is read-only to it.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

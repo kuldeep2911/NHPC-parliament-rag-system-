@@ -1,0 +1,56 @@
+# Source-directory watcher — incremental sync.
+#
+# A long-running managed service, NOT a script left in a terminal. It observes the
+# ORIGINAL source tree (read-only), and on a change runs only the affected slice through
+# crawl -> parse -> index, so a new question folder becomes retrievable on its own.
+#
+#   sudo cp deploy/systemd/nhpc-*.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now nhpc-watch
+#   journalctl -u nhpc-watch -f          # follow the log
+#
+# Restart-safety: the work queue lives in Postgres, so a restart mid-processing loses
+# nothing -- pending events are still queued, and a job left claimed by the killed process
+# is released on startup. Re-processing is idempotent, so "at least once" is harmless.
+
+[Unit]
+Description=NHPC parliamentary Q&A — source watcher (incremental sync)
+Documentation=file:///opt/nhpc/README.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nhpc
+Group=nhpc
+WorkingDirectory=/opt/nhpc
+
+# Secrets (DB DSN, model API keys) come from the env file, never from this unit.
+EnvironmentFile=/opt/nhpc/.env
+Environment=PYTHONUNBUFFERED=1
+# journald captures stdout/stderr; JSON makes the log machine-readable for a collector.
+Environment=NHPC_LOG_JSON=1
+
+ExecStart=/opt/nhpc/.venv/bin/python -m nhpc_qa.cli watch
+
+Restart=always
+RestartSec=10
+# If it crashes 5 times in 5 minutes, stop and alert rather than crash-loop silently.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# --- hardening -------------------------------------------------------------
+# The watcher must never modify the source data. ProtectSystem=strict makes the whole
+# filesystem read-only, and we then grant write access ONLY to what it legitimately needs:
+# organized/ (the crawl output) and the reports dir. The source tree is deliberately NOT
+# in ReadWritePaths -- so "read-only on source" is enforced by the OS, not just by
+# convention in the code.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/nhpc/organized /opt/nhpc/phase3/_reports /opt/nhpc/logs
+# If your source lives elsewhere, point NHPC_SOURCE_ROOT at it in .env; it stays read-only.
+
+[Install]
+WantedBy=multi-user.target

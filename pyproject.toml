@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nhpc-qa"
+version = "1.0.0"
+description = "NHPC parliamentary Q&A — crawl, parse, index, and retrieve past parliamentary questions and the answers already given"
+requires-python = ">=3.11"
+
+# Pinned. This runs on a single on-prem server; reproducibility beats being current.
+dependencies = [
+    # --- parsing (Docling brings torch + rapidocr; it is the heavy one) -------
+    "docling==2.108.0",
+    "docling-core==2.85.0",
+    "pdfplumber==0.11.9",
+    "pypdf==6.11.0",
+    "pypdfium2==5.0.4",
+    "python-docx==1.2.0",
+    "openpyxl==3.1.5",
+    "pandas==2.2.2",
+    "lxml==6.1.1",
+
+    # --- database + vectors ---------------------------------------------------
+    "psycopg[binary]>=3.2,<4",
+    "pgvector>=0.3,<0.5",
+
+    # --- retrieval ------------------------------------------------------------
+    # LangGraph CONDUCTS the query graph; it never owns a model or DB call.
+    "langgraph>=0.2,<0.7",
+
+    # --- API ------------------------------------------------------------------
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+
+    # --- watcher --------------------------------------------------------------
+    "watchdog>=4,<7",
+]
+
+[project.optional-dependencies]
+# Optional developer trace UI. OFF by default: when LANGFUSE_ENABLED is false the SDK is
+# never imported, so this is genuinely optional and not a hidden hard dependency.
+langfuse = ["langfuse>=2.53,<3"]
+
+[project.scripts]
+# The single entry point:  nhpc run | serve | watch | query | migrate | inspect | purge
+nhpc = "nhpc_qa.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["nhpc_qa*"]
+
+[tool.setuptools.package-data]
+"nhpc_qa.api" = ["static/*"]

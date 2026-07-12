@@ -1,0 +1,26 @@
+# OPTIONAL — scheduled purge of long-soft-deleted records.
+#
+# DO NOT ENABLE THIS UNTIL YOU HAVE DECIDED YOUR RETENTION POLICY. Purging is the only
+# thing in the system that destroys data, and it cannot be undone.
+#
+# A soft-deleted record is already invisible to officers; keeping it costs a little disk.
+# The only reason to purge is a retention rule. If you have one, this timer applies it on a
+# schedule -- but the grace period below is what actually protects you, not the timer.
+#
+#   sudo cp deploy/systemd/nhpc-purge.* /etc/systemd/system/
+#   sudo systemctl enable --now nhpc-purge.timer
+#   systemctl list-timers nhpc-purge      # when does it next run?
+#
+# To purge by hand instead (recommended until the policy is settled):
+#   nhpc purge --older-than 30d --dry-run     # see what WOULD go
+#   nhpc purge --older-than 30d               # asks for confirmation
+
+[Unit]
+Description=Weekly purge of records soft-deleted longer than the grace period
+
+[Timer]
+OnCalendar=Sun 03:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

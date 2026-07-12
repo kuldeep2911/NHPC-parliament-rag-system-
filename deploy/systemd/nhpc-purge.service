@@ -1,0 +1,32 @@
+# The one-shot job behind nhpc-purge.timer.
+#
+# --yes is required here because a timer cannot answer a confirmation prompt. That is
+# precisely why the GRACE PERIOD (--older-than) is the real safety mechanism: by the time
+# a record is eligible it has been invisible to officers for 30 days and nobody has
+# restored it.
+#
+# Run it with --dry-run first (edit ExecStart, start the unit once, read the journal)
+# before letting the timer run it for real.
+
+[Unit]
+Description=NHPC — purge records soft-deleted longer than the grace period
+Documentation=file:///opt/nhpc/README.md
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nhpc
+Group=nhpc
+WorkingDirectory=/opt/nhpc
+
+EnvironmentFile=/opt/nhpc/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=NHPC_LOG_JSON=1
+
+# 30 days. Every purge is written to sync_log, so what went and when is always answerable.
+ExecStart=/opt/nhpc/.venv/bin/python -m nhpc_qa.cli purge --older-than 30d --yes
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
