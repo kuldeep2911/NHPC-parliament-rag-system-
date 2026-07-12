@@ -2,169 +2,323 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NHPC — Parliamentary Q&A Retrieval</title>
+<!-- NO webfont link. The design calls for Inter + Source Serif, but this service is
+     deployed AIR-GAPPED: a request to fonts.googleapis.com would hang, then fall back
+     silently, and it would leak an outbound call from a network that must not make one.
+     The stacks below reach for those faces if the org has them installed and otherwise
+     land on the system UI/serif font, which is what the mock's fallbacks did anyway. -->
 <style>
-  :root { --bd:#d9dee5; --mut:#5b6673; --bg:#f6f8fa; --ok:#0a7a3d; --warn:#a15c00; }
-  * { box-sizing: border-box; }
-  body { font: 15px/1.55 system-ui, "Segoe UI", Roboto, sans-serif; margin:0;
-         color:#16202b; background:var(--bg); }
-  header { background:#0d2b45; color:#fff; padding:14px 22px; }
-  header h1 { margin:0; font-size:17px; font-weight:600; }
-  header .sub { font-size:12px; opacity:.75; margin-top:2px; }
-  main { max-width: 1000px; margin: 22px auto; padding: 0 16px; }
-  .bar { display:flex; gap:8px; }
-  input[type=text] { flex:1; padding:11px 13px; border:1px solid var(--bd);
-                     border-radius:7px; font-size:15px; background:#fff; }
-  button { padding:11px 18px; border:0; border-radius:7px; background:#0d2b45;
-           color:#fff; font-size:14px; cursor:pointer; }
-  button:disabled { opacity:.5; cursor:default; }
-  .who { margin-top:8px; font-size:12px; color:var(--mut); display:flex; gap:14px; }
-  .who input { border:1px solid var(--bd); border-radius:5px; padding:3px 7px;
-               font-size:12px; width:110px; }
-  .diag { margin:16px 0; padding:10px 13px; background:#fff; border:1px solid var(--bd);
-          border-radius:7px; font-size:12.5px; color:var(--mut); }
-  .diag b { color:#16202b; }
-  .card { background:#fff; border:1px solid var(--bd); border-radius:9px;
-          padding:15px 17px; margin-bottom:13px; }
-  .card h3 { margin:0 0 4px; font-size:15px; }
-  .meta { font-size:12px; color:var(--mut); margin-bottom:9px; }
-  .q { font-weight:600; margin-bottom:6px; }
-  .a { white-space:pre-wrap; background:#fafbfc; border-left:3px solid #c9d2dc;
-       padding:8px 11px; border-radius:0 5px 5px 0; margin-bottom:10px; }
-  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:20px;
-         background:#eef2f6; color:var(--mut); margin-right:5px; }
-  .files button, .files span { display:inline-block; margin:0 7px 6px 0; font-size:13px;
-         padding:5px 11px; border:1px solid var(--bd); border-radius:6px;
-         background:#fff; text-decoration:none; color:#0d2b45; cursor:pointer; }
-  .files button:hover { background:#f0f4f8; }
-  .files button:disabled { opacity:.6; cursor:default; }
-  .files span.na { color:var(--warn); border-style:dashed; cursor:not-allowed; }
-  .sig { font-size:11.5px; color:var(--mut); margin-top:8px;
-         border-top:1px dashed var(--bd); padding-top:7px; }
-  .fb button { background:#fff; color:#16202b; border:1px solid var(--bd);
-               padding:4px 12px; font-size:14px; margin-right:6px; }
-  .fb button.on { background:#0d2b45; color:#fff; border-color:#0d2b45; }
-  .fb input { border:1px solid var(--bd); border-radius:5px; padding:4px 8px;
-              font-size:12px; width:230px; }
-  .empty { padding:26px; text-align:center; color:var(--mut); }
+  :root {
+    --ink:#14181d; --ink2:#2b2f34; --mut:#6b7178; --mut2:#9a9fa6; --faint:#adb2b8;
+    --line:#e6e4e0; --line2:#e2e0da; --page:#f7f7f5; --card:#fff;
+    --navy:#1b3a63; --warn:#8a6a1f;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.55 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+         background:var(--page); color:var(--ink); }
+  /* Visible focus everywhere — officers must be able to drive this from the keyboard. */
+  :focus-visible { outline:2px solid #2451a3; outline-offset:1px; }
+  ::placeholder { color:#97a0ab; }
+
+  header { background:#fff; border-bottom:1px solid var(--line); padding:22px 40px; }
+  .wrap { max-width:980px; margin:0 auto; }
+  header h1 { font-family:'Source Serif 4', Georgia, serif; font-size:22px; font-weight:700;
+              letter-spacing:.2px; color:var(--ink); margin:0; }
+  header .sub { font-size:13.5px; color:var(--mut); margin-top:4px; }
+
+  /* The search bar is sticky: a new search is always one click away, at any scroll depth. */
+  .searchbar { position:sticky; top:0; z-index:20; background:var(--page);
+               border-bottom:1px solid var(--line); padding:18px 40px 14px;
+               box-shadow:0 4px 10px rgba(20,24,29,.03); }
+  .bar { display:flex; gap:10px; align-items:stretch; }
+  #q { flex:1; min-width:0; font:15px 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif; padding:13px 16px;
+       border:1.5px solid #d7d4ce; border-radius:8px; background:#fff; color:var(--ink); }
+  .btn { border-radius:8px; font:600 14.5px 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif; cursor:pointer;
+         white-space:nowrap; padding:0 22px; border:none; background:var(--navy); color:#fff; }
+  .btn:hover:not(:disabled) { background:#14304f; }
+  .btn:disabled { opacity:.55; cursor:default; }
+  .btn.ghost { background:#fff; color:#40464e; border:1.5px solid #d7d4ce; font-weight:500;
+               font-size:14px; padding:0 18px; }
+  .btn.ghost:hover:not(:disabled) { background:#f0efec; border-color:#c3bfb6; }
+  .btn.ghost[aria-expanded="true"] { background:#f0efec; }
+
+  /* Past searches: in-memory only (see PAST[] below) — never localStorage. */
+  .past { position:absolute; top:calc(100% + 8px); right:0; width:420px; background:#fff;
+          border:1px solid var(--line2); border-radius:10px; padding:6px; z-index:30;
+          box-shadow:0 12px 28px rgba(20,24,29,.12); }
+  .past h4 { font-size:11.5px; font-weight:600; text-transform:uppercase; letter-spacing:.04em;
+             color:#8a8f96; padding:8px 10px 6px; margin:0; }
+  .past .item { display:flex; align-items:center; justify-content:space-between; gap:12px;
+                padding:10px; border-radius:7px; cursor:pointer; border:0; background:none;
+                width:100%; text-align:left; font:inherit; overflow:hidden; }
+  .past .item:hover { background:#f3f2ef; }
+  /* A flex item defaults to min-width:auto and REFUSES to shrink below its content, so a
+     long query pushed the row wider than the panel and text-overflow never engaged.
+     min-width:0 lets it shrink; the ellipsis then has a box to clip against. */
+  .past .txt { flex:1; min-width:0; }
+  .past .pq { display:block; font-size:13.5px; color:#23272c; font-weight:500;
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .past .pm { display:block; font-size:11.5px; color:var(--mut2); margin-top:2px; }
+  .past .rerun { font-size:12px; color:#b3b7bc; flex-shrink:0; white-space:nowrap; }
+  .past .none { padding:10px; font-size:13px; color:var(--mut2); }
+
+  main { max-width:980px; margin:0 auto; padding:26px 40px 80px; }
+  .diag { font-size:13px; color:#565c63; padding:2px 2px 4px; }
+  .diag b { color:#3a4046; }
+  .diag .n { color:#23272c; font-weight:600; }
+  .diag .bad { color:var(--warn); font-weight:600; }
+  .disclaimer { font-size:12.5px; font-style:italic; color:var(--mut2); padding:0 2px 20px; }
+
+  .cards { display:flex; flex-direction:column; gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:22px 24px; }
+  .card h3 { font-size:15.5px; font-weight:600; color:var(--ink); line-height:1.45; margin:0; }
+  .card h3 .rk { color:var(--mut); }
+  .meta { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:8px;
+          font-size:12.5px; color:#767c83; }
+  .meta .sep { color:#c3c1ba; }
+  .pill { font-size:11.5px; font-weight:500; padding:3px 9px; border-radius:20px;
+          background:#eceae5; color:#767c83; }
+
+  /* answer_type badges — one per API value, so the badge always states what the record says */
+  .badge { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:600;
+           padding:3px 9px; border-radius:20px; white-space:nowrap; flex-shrink:0; }
+  .badge.substantive          { background:var(--navy); color:#fff; border:1px solid var(--navy); }
+  .badge.deferred_to_ministry { background:#fff; color:var(--warn); border:1.5px solid #d9b968; }
+  .badge.not_applicable       { background:#fff; color:#767c83; border:1.5px dashed #c3c1ba; }
+  .badge.nil                  { background:#eceae5; color:#767c83; border:1px solid #eceae5; }
+  .badge.unknown              { background:#eceae5; color:#767c83; border:1px solid #eceae5; }
+
+  .q { font-size:14.5px; color:var(--ink2); line-height:1.55; margin-top:14px; }
+  .a { border-left:3px solid var(--navy); background:#f4f6f8; border-radius:0 8px 8px 0;
+       padding:13px 16px; margin-top:12px; font-size:14px; color:#33383e; line-height:1.55;
+       white-space:pre-wrap; }
+
+  .files { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
+  .file { display:inline-flex; align-items:center; gap:6px; background:#fff; color:var(--navy);
+          border:1.5px solid #cdd6e0; border-radius:7px; padding:8px 14px;
+          font:600 13px 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif; cursor:pointer; }
+  .file:hover:not(:disabled) { background:#eef2f7; }
+  .file:disabled { opacity:.6; cursor:default; }
+  /* Honest state: referenced in the record, but the file was never found. NOT a button. */
+  .file.na { background:#faf8f4; color:#a48a52; border:1.5px dashed #ddd0b2; font-weight:500;
+             cursor:not-allowed; }
+
+  .sig { font-size:11.5px; color:var(--faint); margin-top:16px; padding-top:12px;
+         border-top:1px dashed #ece9e3; font-family:ui-monospace, SFMono-Regular, monospace; }
+  .fb { display:flex; align-items:center; gap:8px; margin-top:14px; }
+  .fb button { background:#fff; border:1.5px solid var(--line2); border-radius:7px;
+               padding:7px 12px; font-size:14px; cursor:pointer; }
+  .fb button:hover { filter:brightness(.98); }
+  .fb button.up.on   { background:#eaf2ec; border-color:#7fb08f; }
+  .fb button.down.on { background:#faeceb; border-color:#d99a94; }
+  .fb input { flex:1; max-width:320px; font:13px 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+              padding:8px 12px; border:1.5px solid var(--line2); border-radius:7px;
+              background:#fff; color:#33383e; }
+  .fb .saved { font-size:12px; color:#5f8a6c; }
+
+  .empty { text-align:center; padding:90px 20px; color:var(--mut2); }
+  .empty .big { font-size:34px; margin-bottom:10px; }
+  .empty .t { font-size:15px; font-weight:500; color:#565c63; }
+  .empty .d { font-size:13px; margin-top:6px; }
+
+  @media (max-width:720px) {
+    header, .searchbar { padding-left:18px; padding-right:18px; }
+    main { padding:20px 18px 60px; }
+    .bar { flex-wrap:wrap; }
+    #q { flex-basis:100%; }
+    .past { width:100%; }
+  }
 </style>
 </head>
 <body>
+
 <header>
-  <h1>NHPC — Parliamentary Q&amp;A Retrieval</h1>
-  <div class="sub">Past questions and the answers already given. Results are retrieved, not generated.</div>
+  <div class="wrap">
+    <h1>NHPC — Parliamentary Q&amp;A Retrieval</h1>
+    <div class="sub">Past questions and the answers already given. Results are retrieved, not generated.</div>
+  </div>
 </header>
 
-<main>
-  <div class="bar">
-    <input type="text" id="q" placeholder="e.g. electricity dues owed by J&amp;K  •  जलविद्युत परियोजना की जानकारी"
-           autofocus>
-    <button id="go">Search</button>
+<div class="searchbar">
+  <div class="wrap" style="position:relative;">
+    <div class="bar">
+      <input type="text" id="q" autofocus autocomplete="off"
+             aria-label="Search a parliamentary question or topic"
+             placeholder="e.g. electricity dues owed by J&amp;K  •  जलविद्युत परियोजना की जानकारी">
+      <button class="btn" id="go">Search</button>
+      <button class="btn ghost" id="new">+ New search</button>
+      <button class="btn ghost" id="recent" aria-expanded="false" aria-haspopup="true">🕘 Recent</button>
+    </div>
+    <div id="pastPanel" hidden></div>
   </div>
-  <div class="who">
-    <span>identity (set by your proxy in production):</span>
-    <label>user <input id="uid" value="officer1"></label>
-    <label>role <input id="role" value="officer"></label>
-  </div>
+</div>
 
-  <div id="diag" class="diag" hidden></div>
+<main>
+  <div id="diag" hidden></div>
   <div id="out"></div>
 </main>
 
 <script>
 const $ = s => document.querySelector(s);
+
+// ---------------------------------------------------------------------------
+// IDENTITY — fixed default, not shown and not editable.
+//
+// The API's RBAC/audit path is UNCHANGED: it still receives X-User-Id / X-User-Role on
+// every /query, /file and /feedback call, exactly as before. We simply stop asking the
+// officer to type their own identity, which was never a real control (self-asserted).
+// In production the authenticating reverse proxy overwrites these headers.
+//
+// TODO: a login system will replace this default — take the identity from the session
+// rather than hardcoding it here.
+// ---------------------------------------------------------------------------
+const IDENTITY = { user_id: "officer1", user_role: "officer" };
+
 let RUN_ID = null;
+
+// Past searches live in memory for the session only — deliberately NOT localStorage /
+// sessionStorage. A reload clearing them is acceptable.
+const PAST = [];
 
 function headers() {
   return { "Content-Type": "application/json",
-           "X-User-Id": $("#uid").value.trim() || "anonymous",
-           "X-User-Role": $("#role").value.trim() };
+           "X-User-Id": IDENTITY.user_id,
+           "X-User-Role": IDENTITY.user_role };
 }
 
-async function search() {
-  const q = $("#q").value.trim();
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+
+// answer_type comes straight from the API. Unknown values still render (as a neutral
+// badge with the raw value) rather than being silently dropped or mislabelled.
+const BADGE = {
+  substantive:          "✓ Substantive",
+  deferred_to_ministry: "→ Deferred to ministry",
+  not_applicable:       "— Not applicable",
+  nil:                  "○ Nil",
+};
+function badge(t) {
+  const cls = BADGE[t] ? t : "unknown";
+  return `<span class="badge ${cls}">${esc(BADGE[t] || t || "unknown")}</span>`;
+}
+
+// The API reports timings PER GRAPH NODE, with no "total" — so add them up.
+function totalMs(t) {
+  return Object.values(t || {}).reduce((a, b) => a + (Number(b) || 0), 0);
+}
+
+// ---------------------------------------------------------------------------
+// SEARCH — via fetch, rendered in place. No page reload, ever.
+// ---------------------------------------------------------------------------
+async function search(text) {
+  const q = (text !== undefined ? text : $("#q").value).trim();
   if (!q) return;
+  $("#q").value = q;
+  closePast();
   $("#go").disabled = true;
-  $("#out").innerHTML = '<div class="empty">Searching…</div>';
+  $("#out").innerHTML = '<div class="empty"><div class="t">Searching…</div></div>';
   $("#diag").hidden = true;
   try {
     const r = await fetch("/query", { method:"POST", headers: headers(),
                                       body: JSON.stringify({ query: q }) });
-    if (!r.ok) { const e = await r.json();
-                 $("#out").innerHTML = `<div class="empty">${r.status}: ${e.detail}</div>`;
-                 return; }
+    if (!r.ok) {
+      let msg = r.statusText;
+      try { msg = (await r.json()).detail || msg; } catch (_) {}
+      $("#out").innerHTML = `<div class="empty"><div class="t">${r.status}: ${esc(msg)}</div></div>`;
+      return;
+    }
     const d = await r.json();
     RUN_ID = d.run_id;
     render(d);
-  } finally { $("#go").disabled = false; }
+    remember(q, d.results.length);
+  } catch (e) {
+    $("#out").innerHTML = `<div class="empty"><div class="t">Search failed: ${esc(String(e))}</div></div>`;
+  } finally {
+    $("#go").disabled = false;
+  }
 }
 
 function render(d) {
   const g = d.diagnostics;
   $("#diag").hidden = false;
   $("#diag").innerHTML =
-    `<b>${d.results.length}</b> results · language <b>${d.language}</b> `
-    + `(detected for processing — it never filters the search) · `
-    + `entities ${d.entities.length ? "<b>"+d.entities.join(", ")+"</b>" : "none"} · `
-    + `retrievers fired <b>${(g.retrievers_fired||[]).join("+") || "—"}</b> of `
-    + `${(g.retrievers_eligible||[]).length} eligible`
-    + (g.widened ? ` · <b>widened</b> (${g.widen_reason})` : "")
-    + (g.rerank_failed ? ` · <b style="color:#a15c00">reranker unavailable — showing fusion order</b>` : "")
-    + ` · ${g.timings_ms.total} ms`
-    + `<br><i>Scores below are heuristics for triage, not a guarantee of correctness.</i>`;
+    `<div class="diag">`
+    + `<span class="n">${d.results.length} results</span>`
+    + ` · language <b>${esc(d.language)}</b> (detected for processing — it never filters the search)`
+    + ` · entities ${d.entities.length ? "<b>" + esc(d.entities.join(", ")) + "</b>" : "none"}`
+    + ` · retrievers fired <b>${esc((g.retrievers_fired || []).join("+")) || "—"}</b>`
+    + ` of ${(g.retrievers_eligible || []).length} eligible`
+    + (g.widened ? ` · <b>widened</b> (${esc(g.widen_reason)})` : "")
+    // Kept deliberately: if the reranker died, the officer must know the order is fusion-
+    // only. Hiding it would make these results look more trustworthy than they are.
+    + (g.rerank_failed ? ` · <span class="bad">reranker unavailable — showing fusion order</span>` : "")
+    // diagnostics.timings_ms is PER NODE (query_process, retrieve, fuse, rerank, assemble)
+    // -- there is no "total" key, so sum them here. The old UI read .total and rendered
+    // "undefined ms" on every search.
+    + ` · ${totalMs(g.timings_ms)} ms`
+    + `</div>`
+    + `<div class="disclaimer">Scores below are heuristics for triage, not a guarantee of correctness.</div>`;
 
   if (!d.results.length) {
-    $("#out").innerHTML = '<div class="empty">No matching past questions.</div>';
+    $("#out").innerHTML = `<div class="empty"><div class="big">🔍</div>`
+      + `<div class="t">No matching past questions.</div></div>`;
     return;
   }
 
-  $("#out").innerHTML = d.results.map(r => {
-    // File buttons are BUTTONS, not <a href> links.
+  $("#out").innerHTML = '<div class="cards">' + d.results.map(r => {
+    // File controls are BUTTONS, not <a href> links.
     //
     // A plain <a href> navigation is a browser GET: it cannot carry the X-User-Id /
     // X-User-Role headers, so /file correctly rejected it with 403 ("no role supplied").
     // The fix is NOT to weaken RBAC or to pass the role in the query string (trivially
     // forged, and it would leak into logs and browser history) -- it is to fetch the file
-    // WITH the headers and then hand the bytes to the browser as a blob URL.
+    // WITH the headers and hand the bytes to the browser as a blob URL.
+    //
+    // The request carries doc_key + file_kind (+ ref_label) — an ID, NEVER a path.
     const files = [
       r.reply_file.available
-        ? `<button class="filebtn" onclick="openFile(this,'${esc(r.doc_key)}','reply',null)">📄 Reply</button>`
-        : `<span class="na">Reply unavailable</span>`,
+        ? `<button class="file" onclick="openFile(this,'${esc(r.doc_key)}','reply',null)">📄 Reply</button>`
+        : `<span class="file na" title="no reply file on record">📄 Reply — unavailable</span>`,
       ...r.annexures.map(a => a.available
-        ? `<button class="filebtn" onclick="openFile(this,'${esc(r.doc_key)}','annexure','${esc(a.ref_label)}')">📎 ${a.ref_label}</button>`
-        : `<span class="na" title="referenced in the reply, but the file was never found">📎 ${a.ref_label} — ${a.status}</span>`)
+        ? `<button class="file" onclick="openFile(this,'${esc(r.doc_key)}','annexure','${esc(a.ref_label)}')">📎 ${esc(a.ref_label)}</button>`
+        : `<span class="file na" title="Referenced in the record but the file could not be located.">⚠ ${esc(a.ref_label)} — ${esc(a.status)}</span>`)
     ].join("");
 
     const s = r.signals;
-    return `<div class="card" data-doc="${r.doc_key}">
-      <h3>#${r.rank} · ${r.subject || "(no subject)"}</h3>
-      <div class="meta">${r.house} · ${r.session} · diary ${r.diary_number}
-        <span class="tag">${r.answer_type}</span>
-        ${r.starred ? '<span class="tag">starred</span>' : ""}
-        ${r.needs_review ? '<span class="tag">flagged in parsing</span>' : ""}
+    const moved = s.rerank_movement > 0 ? "+" + s.rerank_movement : s.rerank_movement;
+    return `<div class="card" data-doc="${esc(r.doc_key)}">
+      <h3><span class="rk">#${r.rank} ·</span> ${esc(r.subject || "(no subject)")}</h3>
+      <div class="meta">
+        <span>${esc(r.house)}</span><span class="sep">·</span>
+        <span>${esc(r.session)}</span><span class="sep">·</span>
+        <span>diary ${esc(r.diary_number)}</span>
+        ${badge(r.answer_type)}
+        ${r.starred ? '<span class="pill">starred</span>' : ""}
+        ${r.needs_review ? '<span class="pill" title="a parsing warning, not a correctness gate">flagged in parsing</span>' : ""}
       </div>
-      <div class="q">(${r.part_label}) ${esc(r.question_text)}</div>
+      <div class="q">(${esc(r.part_label)}) ${esc(r.question_text)}</div>
       <div class="a">${esc(r.answer_text || "(no answer text)")}</div>
       <div class="files">${files}</div>
-      <div class="sig">rrf ${s.rrf_score} · rerank ${s.rerank_logit ?? "—"}
-        (moved ${s.rerank_movement > 0 ? "+" : ""}${s.rerank_movement}) ·
-        found by ${s.retrievers.join("+")} · agreement ${s.agreement}</div>
-      <div class="sig fb">
-        <button onclick="vote(this,'up')">👍</button>
-        <button onclick="vote(this,'down')">👎</button>
-        <input placeholder="why? (optional)">
+      <div class="sig">rrf ${s.rrf_score} · rerank ${s.rerank_logit ?? "—"} (moved ${moved}) ·
+        found by ${esc(s.retrievers.join("+"))} · agreement ${s.agreement}</div>
+      <div class="fb">
+        <button class="up" onclick="vote(this,'up')" aria-label="helpful">👍</button>
+        <button class="down" onclick="vote(this,'down')" aria-label="not helpful">👎</button>
+        <input placeholder="why? (optional)" aria-label="why (optional)">
       </div>
     </div>`;
-  }).join("");
+  }).join("") + '</div>';
 }
 
+// ---------------------------------------------------------------------------
+// FILES — by ID, with identity headers, opened as a blob (see the note in render()).
+// ---------------------------------------------------------------------------
 async function openFile(btn, doc_key, file_kind, ref_label) {
-  // Fetch WITH the identity headers (an <a href> cannot send them), then open the
-  // returned bytes as a blob. RBAC and the audit log are untouched and still enforced
-  // server-side -- this only fixes how the browser asks.
   const p = new URLSearchParams({ doc_key, file_kind, run_id: RUN_ID || "" });
   if (ref_label) p.set("ref_label", ref_label);
-  const label = btn.textContent;
+  const label = btn.innerHTML;
   btn.disabled = true; btn.textContent = "opening…";
   try {
     const r = await fetch("/file?" + p.toString(), { headers: headers() });
@@ -174,35 +328,103 @@ async function openFile(btn, doc_key, file_kind, ref_label) {
       alert(`Cannot open file (${r.status}): ${msg}`);
       return;
     }
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(await r.blob());
     window.open(url, "_blank");
-    // give the new tab time to load before revoking
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);   // let the new tab load first
   } catch (e) {
     alert("Cannot open file: " + e);
   } finally {
-    btn.disabled = false; btn.textContent = label;
+    btn.disabled = false; btn.innerHTML = label;
   }
 }
 
+// ---------------------------------------------------------------------------
+// FEEDBACK — same run_id + doc_key join. Capture only; it never touches ranking.
+// ---------------------------------------------------------------------------
 async function vote(btn, verdict) {
   const card = btn.closest(".card");
   const doc_key = card.dataset.doc;
   const reason = card.querySelector(".fb input").value.trim() || null;
   const r = await fetch("/feedback", { method:"POST", headers: headers(),
     body: JSON.stringify({ run_id: RUN_ID, doc_key, verdict, reason }) });
-  if (r.ok) {
-    // a repeat vote UPDATES the previous one — reflect that in the UI
-    card.querySelectorAll(".fb button").forEach(b => b.classList.remove("on"));
-    btn.classList.add("on");
-  }
+  if (!r.ok) { alert("Could not record feedback."); return; }
+  // A repeat vote UPDATES the previous one (upsert) — one vote per result, changeable.
+  card.querySelectorAll(".fb button").forEach(b => b.classList.remove("on"));
+  btn.classList.add("on");
+  let note = card.querySelector(".fb .saved");
+  if (!note) { note = document.createElement("span"); note.className = "saved";
+               card.querySelector(".fb").appendChild(note); }
+  note.textContent = "recorded";
 }
 
-function esc(s) { const d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML; }
+// ---------------------------------------------------------------------------
+// PAST SEARCHES — in-memory for the session (no localStorage/sessionStorage).
+// ---------------------------------------------------------------------------
+function remember(query, count) {
+  const i = PAST.findIndex(p => p.query === query);
+  if (i !== -1) PAST.splice(i, 1);              // re-running one moves it to the top
+  PAST.unshift({ query, count, at: new Date() });
+  PAST.length = Math.min(PAST.length, 10);
+}
 
-$("#go").onclick = search;
+function ago(d) {
+  const s = (Date.now() - d) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  if (s < 86400) return Math.floor(s / 3600) + " hr ago";
+  return Math.floor(s / 86400) + " d ago";
+}
+
+function drawPast() {
+  const el = $("#pastPanel");
+  el.className = "past";
+  el.innerHTML = "<h4>Recent searches</h4>" + (PAST.length
+    // title= so the full query is still readable once the ellipsis truncates it
+    ? PAST.map((p, i) => `<button class="item" data-i="${i}" title="${esc(p.query)}">
+         <span class="txt">
+           <span class="pq">${esc(p.query)}</span>
+           <span class="pm">${p.count} result${p.count === 1 ? "" : "s"} · ${ago(p.at)}</span>
+         </span>
+         <span class="rerun">↻ rerun</span>
+       </button>`).join("")
+    : '<div class="none">No searches yet this session.</div>');
+  // Clicking a past search re-runs it through the API and re-renders in place.
+  el.querySelectorAll(".item").forEach(b =>
+    b.onclick = () => search(PAST[+b.dataset.i].query));
+}
+
+function openPast()  { drawPast(); $("#pastPanel").hidden = false; $("#recent").setAttribute("aria-expanded", "true"); }
+function closePast() { $("#pastPanel").hidden = true;  $("#recent").setAttribute("aria-expanded", "false"); }
+
+// ---------------------------------------------------------------------------
+// WIRING
+// ---------------------------------------------------------------------------
+$("#go").onclick  = () => search();
 $("#q").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+
+// New search: clear the results in place (no reload) and put the cursor in the box.
+$("#new").onclick = () => {
+  $("#q").value = "";
+  RUN_ID = null;
+  $("#diag").hidden = true;
+  $("#out").innerHTML = "";
+  closePast();
+  $("#q").focus();
+};
+
+$("#recent").onclick = e => {
+  e.stopPropagation();
+  $("#pastPanel").hidden ? openPast() : closePast();
+};
+document.addEventListener("click", e => {
+  if (!$("#pastPanel").hidden && !e.target.closest("#pastPanel") && e.target !== $("#recent")) closePast();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closePast(); });
+
+// Landing state.
+$("#out").innerHTML = `<div class="empty"><div class="big">🔍</div>
+  <div class="t">Search past parliamentary questions</div>
+  <div class="d">Results are retrieved from what's already on file — nothing is generated.</div></div>`;
 </script>
 </body>
 </html>
