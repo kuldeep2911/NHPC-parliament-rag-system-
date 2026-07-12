@@ -1,8 +1,11 @@
 """
 Phase-4 API — query, file serving, feedback.
 
-    uvicorn phase4.api.app:app --host 127.0.0.1 --port 8080
-    (or: python -m phase4.api.app)
+    python -m phase4.api.app          ->  http://127.0.0.1:8099
+
+Port 8099, not 8080: on Windows 8080 often falls inside a reserved TCP exclusion range
+(Hyper-V/WinNAT) and fails to bind with WinError 10013 even though nothing is listening.
+Override with PHASE4_API_PORT.
 
 ENDPOINTS
     GET  /                 the officer UI
@@ -25,6 +28,7 @@ READ-ONLY on Phases 1-3 data. Nothing here deletes, shares, or modifies source d
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 
@@ -44,14 +48,13 @@ from phase4.security import audit, paths, rbac
 
 log = logging.getLogger("nhpc.phase4.api")
 
-app = FastAPI(title="NHPC Parliamentary Q&A — Retrieval", version="1.0")
-
 # Built once at startup: providers, entity vocabulary, the compiled graph.
 _STATE: dict = {}
 
 
-@app.on_event("startup")
-def _startup():
+@contextlib.asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Build the providers once on startup; close the DB connection on shutdown."""
     load_dotenv()
     cfg = Phase4Config()
     errs = cfg.validate_phase4()
@@ -63,8 +66,8 @@ def _startup():
     # connect(cfg).__enter__() and dropping the manager lets the generator be
     # garbage-collected, which runs its finally: and CLOSES the connection --
     # producing "the connection is closed" on the first request.
-    _STATE["_conn_ctx"] = connect(cfg)
-    conn = _STATE["_conn_ctx"].__enter__()
+    conn_ctx = connect(cfg)
+    conn = conn_ctx.__enter__()
     deps = {
         "cfg": cfg,
         "conn": conn,
@@ -81,15 +84,16 @@ def _startup():
     log.info("phase4 api ready | rerank=%s generation=%s | %d entities",
              cfg.rerank_enabled, cfg.generation_enabled, len(deps["entity_vocab"]))
 
+    yield
 
-@app.on_event("shutdown")
-def _shutdown():
-    ctx = _STATE.pop("_conn_ctx", None)
-    if ctx is not None:
-        try:
-            ctx.__exit__(None, None, None)
-        except Exception:       # noqa: BLE001 -- shutdown must not raise
-            pass
+    try:
+        conn_ctx.__exit__(None, None, None)
+    except Exception:           # noqa: BLE001 -- shutdown must not raise
+        pass
+
+
+app = FastAPI(title="NHPC Parliamentary Q&A — Retrieval", version="1.0",
+              lifespan=lifespan)
 
 
 def identity(x_user_id: str = Header(default="anonymous"),
@@ -249,13 +253,51 @@ def ui():
 
 
 def main():
+    import socket
     import uvicorn
+
     load_dotenv()
     cfg = Phase4Config()
     logging.basicConfig(level=logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
+
+    # Fail EARLY with an actionable message. Uvicorn otherwise builds the whole app
+    # (loading the embedder, the reranker and 1200+ entities) and only then discovers it
+    # cannot bind -- which reads like the service started and then died for no reason.
+    #
+    # On Windows a port can be inside a reserved TCP exclusion range (Hyper-V/WinNAT) and
+    # bind with WinError 10013 even though nothing is listening on it. 8080 commonly is.
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind((cfg.api_host, cfg.api_port))
+    except OSError as e:
+        host, port = cfg.api_host, cfg.api_port
+        code = getattr(e, "winerror", None) or e.errno
+        print(f"\nCannot bind {host}:{port} — {e}\n")
+
+        # The two Windows failures need OPPOSITE responses, so name them apart rather
+        # than printing one guess for both.
+        if code in (10048, 98):        # WSAEADDRINUSE / EADDRINUSE
+            print("  The port is ALREADY IN USE — most likely an earlier run of this")
+            print("  server that is still alive. Find and stop it:\n")
+            print(f"      PowerShell: Get-NetTCPConnection -LocalPort {port} -State Listen |")
+            print("                    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }\n")
+        elif code in (10013, 13):      # WSAEACCES — reserved, NOT in use
+            print("  The port is RESERVED by Windows (Hyper-V/WinNAT) — nothing is")
+            print("  listening on it, but the OS will not let you bind it. Check:\n")
+            print("      netsh interface ipv4 show excludedportrange protocol=tcp\n")
+
+        print("  Or just use a different port:")
+        print("      PowerShell: $env:PHASE4_API_PORT=8123; python -X utf8 -m phase4.api.app")
+        print("      or set PHASE4_API_PORT=8123 in your .env\n")
+        return 1
+    finally:
+        probe.close()
+
+    print(f"\n  Officer UI: http://{cfg.api_host}:{cfg.api_port}\n")
     uvicorn.run("phase4.api.app:app", host=cfg.api_host, port=cfg.api_port)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

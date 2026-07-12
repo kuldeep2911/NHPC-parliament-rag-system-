@@ -59,7 +59,10 @@ class Phase4Config(Phase3Config):
     dense_top_n:   int = field(default_factory=lambda: _env_int("RETRIEVE_DENSE_TOP_N", 30))
     keyword_top_n: int = field(default_factory=lambda: _env_int("RETRIEVE_KEYWORD_TOP_N", 30))
     entity_top_n:  int = field(default_factory=lambda: _env_int("RETRIEVE_ENTITY_TOP_N", 30))
-    final_top_k:   int = field(default_factory=lambda: _env_int("RETRIEVE_FINAL_TOP_K", 8))
+    # How many results the officer actually sees, after reranking. Kept small on purpose:
+    # an officer scans these by eye, and the cross-encoder's precision falls off quickly
+    # past the top few. Raise RETRIEVE_FINAL_TOP_K if you want a longer list.
+    final_top_k:   int = field(default_factory=lambda: _env_int("RETRIEVE_FINAL_TOP_K", 5))
 
     # --- RRF fusion ----------------------------------------------------------
     # score(d) = sum over retrievers r of  weight_r / (rrf_k + rank_r(d))
@@ -127,7 +130,11 @@ class Phase4Config(Phase3Config):
 
     # --- API / security ------------------------------------------------------
     api_host: str = field(default_factory=lambda: _env("PHASE4_API_HOST", "127.0.0.1"))
-    api_port: int = field(default_factory=lambda: _env_int("PHASE4_API_PORT", 8080))
+    # 8099, not 8080: on Windows, 8080 frequently falls inside a reserved TCP exclusion
+    # range (Hyper-V / WinNAT), and binding it fails with WinError 10013 "an attempt was
+    # made to access a socket in a way forbidden by its access permissions".
+    # Check yours with:  netsh interface ipv4 show excludedportrange protocol=tcp
+    api_port: int = field(default_factory=lambda: _env_int("PHASE4_API_PORT", 8099))
     # Roles allowed to query / open files. Comma-separated.
     roles_query: str = field(default_factory=lambda: _env("PHASE4_ROLES_QUERY", "officer,admin"))
     roles_file: str = field(default_factory=lambda: _env("PHASE4_ROLES_FILE", "officer,admin"))

@@ -117,6 +117,29 @@ set. *(No evaluation layer is built; this only captures cleanly.)*
   When off, the SDK is **never imported**. The durable Postgres trace (`query_runs` /
   `query_results`) is the system of record either way.
 
-## Note
+## The officer UI fetches files; it does not link to them
 
-Port **8080** is often reserved on Windows (WinError 10013). The default here is **8099**.
+The file buttons are **buttons**, not `<a href>` links, and this is deliberate. An
+`<a href>` navigation is a plain browser GET — it **cannot carry the `X-User-Id` /
+`X-User-Role` headers**, so `/file` correctly rejected it with *"no role supplied"*. The
+fix is **not** to weaken RBAC, and **not** to pass the role in the query string (trivially
+forged, and it leaks into server logs and browser history): the UI `fetch()`es the file
+**with** the identity headers and hands the bytes to the browser as a blob URL. The
+endpoint, its RBAC and its audit logging are untouched.
+
+## Notes
+
+**Results shown:** `RETRIEVE_FINAL_TOP_K` (default **5**). Officers scan these by eye and
+the cross-encoder's precision falls off past the top few; raise it if you want a longer
+list.
+
+**Port 8099, not 8080.** On Windows 8080 often falls inside a reserved TCP exclusion range
+(Hyper-V/WinNAT) and fails to bind with **WinError 10013** — nothing is listening, the OS
+simply won't allow it. `netsh interface ipv4 show excludedportrange protocol=tcp` shows
+the ranges. A **WinError 10048** is different: the port really *is* in use, usually by an
+earlier run of this server:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8099 -State Listen |
+  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+```

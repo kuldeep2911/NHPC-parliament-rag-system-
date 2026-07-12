@@ -33,9 +33,11 @@
        padding:8px 11px; border-radius:0 5px 5px 0; margin-bottom:10px; }
   .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:20px;
          background:#eef2f6; color:var(--mut); margin-right:5px; }
-  .files a, .files span { display:inline-block; margin:0 7px 6px 0; font-size:13px;
+  .files button, .files span { display:inline-block; margin:0 7px 6px 0; font-size:13px;
          padding:5px 11px; border:1px solid var(--bd); border-radius:6px;
-         background:#fff; text-decoration:none; color:#0d2b45; }
+         background:#fff; text-decoration:none; color:#0d2b45; cursor:pointer; }
+  .files button:hover { background:#f0f4f8; }
+  .files button:disabled { opacity:.6; cursor:default; }
   .files span.na { color:var(--warn); border-style:dashed; cursor:not-allowed; }
   .sig { font-size:11.5px; color:var(--mut); margin-top:8px;
          border-top:1px dashed var(--bd); padding-top:7px; }
@@ -117,12 +119,19 @@ function render(d) {
   }
 
   $("#out").innerHTML = d.results.map(r => {
+    // File buttons are BUTTONS, not <a href> links.
+    //
+    // A plain <a href> navigation is a browser GET: it cannot carry the X-User-Id /
+    // X-User-Role headers, so /file correctly rejected it with 403 ("no role supplied").
+    // The fix is NOT to weaken RBAC or to pass the role in the query string (trivially
+    // forged, and it would leak into logs and browser history) -- it is to fetch the file
+    // WITH the headers and then hand the bytes to the browser as a blob URL.
     const files = [
       r.reply_file.available
-        ? `<a href="/file?doc_key=${encodeURIComponent(r.doc_key)}&file_kind=reply&run_id=${RUN_ID}" target="_blank">📄 Reply</a>`
+        ? `<button class="filebtn" onclick="openFile(this,'${esc(r.doc_key)}','reply',null)">📄 Reply</button>`
         : `<span class="na">Reply unavailable</span>`,
       ...r.annexures.map(a => a.available
-        ? `<a href="/file?doc_key=${encodeURIComponent(r.doc_key)}&file_kind=annexure&ref_label=${encodeURIComponent(a.ref_label)}&run_id=${RUN_ID}" target="_blank">📎 ${a.ref_label}</a>`
+        ? `<button class="filebtn" onclick="openFile(this,'${esc(r.doc_key)}','annexure','${esc(a.ref_label)}')">📎 ${a.ref_label}</button>`
         : `<span class="na" title="referenced in the reply, but the file was never found">📎 ${a.ref_label} — ${a.status}</span>`)
     ].join("");
 
@@ -147,6 +156,34 @@ function render(d) {
       </div>
     </div>`;
   }).join("");
+}
+
+async function openFile(btn, doc_key, file_kind, ref_label) {
+  // Fetch WITH the identity headers (an <a href> cannot send them), then open the
+  // returned bytes as a blob. RBAC and the audit log are untouched and still enforced
+  // server-side -- this only fixes how the browser asks.
+  const p = new URLSearchParams({ doc_key, file_kind, run_id: RUN_ID || "" });
+  if (ref_label) p.set("ref_label", ref_label);
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = "opening…";
+  try {
+    const r = await fetch("/file?" + p.toString(), { headers: headers() });
+    if (!r.ok) {
+      let msg = r.statusText;
+      try { msg = (await r.json()).detail || msg; } catch (_) {}
+      alert(`Cannot open file (${r.status}): ${msg}`);
+      return;
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    // give the new tab time to load before revoking
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) {
+    alert("Cannot open file: " + e);
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
 }
 
 async function vote(btn, verdict) {
