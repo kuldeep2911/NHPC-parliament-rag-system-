@@ -16,6 +16,19 @@
     --navy:#1b3a63; --warn:#8a6a1f;
   }
   * { box-sizing:border-box; }
+
+  /* ⚠️ THIS RULE IS LOad-BEARING — DO NOT DELETE.
+     The `hidden` attribute works by applying `display:none` from the UA stylesheet, which
+     has the LOWEST possible specificity. Any rule of ours that sets an explicit `display`
+     (.gate{display:flex}, .modal{display:flex}, .gform{display:block}) therefore BEATS it,
+     and `hidden` silently becomes decorative: the element stays visible however many times
+     the JS sets el.hidden = true.
+     That is exactly what happened -- the login form and the forced-change form rendered on
+     top of each other, and the modal could not be closed.
+     `!important` is the right tool here precisely because nothing should ever out-rank
+     "this element is hidden". */
+  [hidden] { display: none !important; }
+
   body { margin:0; font:15px/1.55 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
          background:var(--page); color:var(--ink); }
   /* Visible focus everywhere — officers must be able to drive this from the keyboard. */
