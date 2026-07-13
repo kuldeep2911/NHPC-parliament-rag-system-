@@ -32,7 +32,7 @@ import contextlib
 import logging
 import os
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from nhpc_qa.core.trace.tracer import new_run_id
@@ -44,7 +44,8 @@ from nhpc_qa.retrieval.graph.build import build_graph
 from nhpc_qa.core.trace.query_tracer import QueryTracer
 from nhpc_qa.core.providers.rerank import get_reranker
 from nhpc_qa.retrieval.search import entity
-from nhpc_qa.api.security import audit, paths, rbac
+from nhpc_qa.api import auth_routes
+from nhpc_qa.api.security import audit, deps, paths, rbac, users
 
 log = logging.getLogger("nhpc.phase4.api")
 
@@ -68,7 +69,9 @@ async def lifespan(_app: FastAPI):
     # producing "the connection is closed" on the first request.
     conn_ctx = connect(cfg)
     conn = conn_ctx.__enter__()
-    deps = {
+    # Named graph_deps, not deps: `deps` is now the auth-dependency MODULE (imported
+    # above), and shadowing it here would break require_user/require_admin.
+    graph_deps = {
         "cfg": cfg,
         "conn": conn,
         "embedder": get_embedder(cfg),
@@ -79,10 +82,30 @@ async def lifespan(_app: FastAPI):
     }
     _STATE["cfg"] = cfg
     _STATE["conn"] = conn
-    _STATE["deps"] = deps
-    _STATE["graph"] = build_graph(deps)
+    _STATE["deps"] = graph_deps
+    _STATE["graph"] = build_graph(graph_deps)
+
+    # The auth dependencies read cfg/conn off app.state (they get a Request, not _STATE).
+    _app.state.nhpc = {"cfg": cfg, "conn": conn}
+
+    if cfg.auth_enabled:
+        # Refuse to start with auth ON and no admin in the DB -- that configuration locks
+        # every human out of the application, including the person who could fix it.
+        if not users.admin_exists(conn):
+            raise RuntimeError(
+                "AUTH_ENABLED=true but there is no active admin user.\n"
+                "  Run:  nhpc create-admin --email you@nhpc.in\n"
+                "  (or set AUTH_ENABLED=false to run without authentication)")
+        log.info("authentication ENABLED | cookie=%s secure=%s samesite=%s | "
+                 "lockout after %d failures for %d min",
+                 cfg.cookie_name, cfg.cookie_secure, cfg.cookie_samesite,
+                 cfg.max_failed_logins, cfg.lockout_minutes)
+    else:
+        log.warning("authentication is DISABLED (AUTH_ENABLED=false) — every caller is "
+                    "treated as officer1/officer. Do not run this way in production.")
+
     log.info("phase4 api ready | rerank=%s generation=%s | %d entities",
-             cfg.rerank_enabled, cfg.generation_enabled, len(deps["entity_vocab"]))
+             cfg.rerank_enabled, cfg.generation_enabled, len(graph_deps["entity_vocab"]))
 
     yield
 
@@ -95,11 +118,25 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="NHPC Parliamentary Q&A — Retrieval", version="1.0",
               lifespan=lifespan)
 
+# /auth/* and /admin/*. Every /admin route is behind require_admin, which reads the role
+# from the DATABASE via the session cookie -- never from the request.
+app.include_router(auth_routes.router)
 
-def identity(x_user_id: str = Header(default="anonymous"),
-             x_user_role: str = Header(default="")):
-    """The caller's identity, as asserted by the authenticating proxy in front of us."""
-    return {"user_id": x_user_id, "user_role": x_user_role}
+
+def identity(request: Request):
+    """
+    The caller's identity — DERIVED FROM THE SESSION, never from the request.
+
+    This function is the whole auth change. It used to read X-User-Id / X-User-Role
+    headers, which a client could set to anything ("X-User-Role: admin" was a valid
+    request). It now resolves the session cookie against the sessions+users tables.
+
+    The returned SHAPE is unchanged -- {"user_id", "user_role"} -- so rbac.check(),
+    audit.log_query(), audit.log_file_access() and every endpoint below are untouched.
+    That is also the SSO seam: swap this one function for an OIDC/LDAP token reader and
+    nothing else moves.
+    """
+    return deps.require_user(request)
 
 
 @app.get("/health")
@@ -221,6 +258,9 @@ def file(doc_key: str = Query(...), file_kind: str = Query(...),
 # ---------------------------------------------------------------------------
 @app.post("/feedback")
 def feedback(payload: dict = Body(...), who=Depends(identity)):
+    # Depends(identity) -> require_user: this endpoint used to accept ANY identity,
+    # including none at all (a Step-0 gap). It now requires an authenticated, active user
+    # who does not owe a password change, like every other app endpoint.
     conn = _STATE["conn"]
     run_id = payload.get("run_id")
     verdict = payload.get("verdict")

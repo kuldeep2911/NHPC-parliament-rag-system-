@@ -124,6 +124,21 @@ def cmd_purge(args):
     return purge_main(args)
 
 
+def cmd_create_admin(args):
+    from nhpc_qa.api.security.bootstrap import create_admin
+    return create_admin(email=args.email)
+
+
+def cmd_reset_password(args):
+    from nhpc_qa.api.security.bootstrap import reset_password
+    return reset_password(email=args.email)
+
+
+def cmd_deactivate_user(args):
+    from nhpc_qa.api.security.bootstrap import deactivate
+    return deactivate(email=args.email)
+
+
 # ---------------------------------------------------------------------------
 # parser
 # ---------------------------------------------------------------------------
@@ -190,6 +205,28 @@ def build_parser():
     p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     p.add_argument("--dry-run", action="store_true", help="show what would be purged")
     p.set_defaults(func=cmd_purge)
+
+    # create-admin — one-time first-run bootstrap. Prints a generated password ONCE.
+    p = sub.add_parser(
+        "create-admin",
+        help="one-time: create the administrator (prints a generated password once)")
+    p.add_argument("--email", default=None,
+                   help="the admin's email (or set AUTH_ADMIN_EMAIL)")
+    p.set_defaults(func=cmd_create_admin)
+
+    # reset-password — BREAK GLASS. An admin who is locked out cannot use the admin UI to
+    # fix it, and hand-written SQL against the users table is how people get this wrong.
+    p = sub.add_parser(
+        "reset-password",
+        help="break-glass: issue a new password for a user (prints it once)")
+    p.add_argument("--email", required=True)
+    p.set_defaults(func=cmd_reset_password)
+
+    p = sub.add_parser(
+        "deactivate-user",
+        help="disable an account and revoke its sessions (the account is retained)")
+    p.add_argument("--email", required=True)
+    p.set_defaults(func=cmd_deactivate_user)
 
     return ap
 

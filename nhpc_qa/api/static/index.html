@@ -124,28 +124,142 @@
   .empty .t { font-size:15px; font-weight:500; color:#565c63; }
   .empty .d { font-size:13px; margin-top:6px; }
 
+  /* ── auth gate ─────────────────────────────────────────────────────────── */
+  .gate { min-height:100vh; display:flex; align-items:center; justify-content:center;
+          padding:24px; background:var(--page); }
+  .gatecard { width:100%; max-width:400px; background:#fff; border:1px solid var(--line);
+              border-radius:14px; padding:32px; box-shadow:0 8px 28px rgba(20,24,29,.06); }
+  .gtitle { font-family:'Source Serif 4', Georgia, serif; font-size:21px; font-weight:700;
+            margin:0 0 6px; color:var(--ink); }
+  .gsub { font-size:13.5px; color:var(--mut); margin-bottom:20px; line-height:1.5; }
+  .gform { display:block; }
+  .glab { display:block; font-size:12.5px; font-weight:600; color:#40464e; margin:12px 0 5px; }
+  .gin { width:100%; font:14px 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+         padding:10px 12px; border:1.5px solid #d7d4ce; border-radius:8px; background:#fff;
+         color:var(--ink); }
+  .gbtn { width:100%; padding:12px; margin-top:18px; }
+  .ghint { font-size:12px; color:var(--mut2); margin-top:8px; line-height:1.45; }
+  .gerr { margin-top:12px; padding:9px 12px; border-radius:7px; font-size:13px;
+          background:#fdf0ef; color:#9a3b32; border:1px solid #f0cfcb; }
+  .gok  { margin-top:12px; padding:9px 12px; border-radius:7px; font-size:13px;
+          background:#eef5f0; color:#2f6b45; border:1px solid #cfe3d6; }
+
+  /* ── header identity strip ─────────────────────────────────────────────── */
+  .hdr { display:flex; align-items:center; justify-content:space-between; gap:16px;
+         flex-wrap:wrap; }
+  .whoami { display:flex; align-items:center; gap:8px; }
+  .wemail { font-size:13px; color:#40464e; font-weight:500; }
+  .wrole { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em;
+           padding:3px 8px; border-radius:20px; background:#eceae5; color:#767c83; }
+  .wrole.admin { background:var(--navy); color:#fff; }
+  .btn.small { font-size:12.5px; padding:6px 11px; height:auto; }
+  .btn.ghost.danger { color:#9a3b32; border-color:#e6c9c5; }
+  .btn.ghost.danger:hover { background:#fdf0ef; }
+
+  /* ── modal ─────────────────────────────────────────────────────────────── */
+  .modal { position:fixed; inset:0; z-index:60; background:rgba(20,24,29,.45);
+           display:flex; align-items:flex-start; justify-content:center; padding:48px 20px;
+           overflow:auto; }
+  .msheet { width:100%; max-width:860px; background:#fff; border-radius:14px;
+            box-shadow:0 24px 60px rgba(20,24,29,.28); }
+  .mhead { display:flex; align-items:center; justify-content:space-between;
+           padding:18px 22px; border-bottom:1px solid var(--line);
+           font-family:'Source Serif 4', Georgia, serif; font-size:17px; font-weight:700; }
+  #m_body { padding:22px; }
+  .mform { max-width:380px; }
+  .mform.inline { display:flex; gap:8px; max-width:none; flex-wrap:wrap; align-items:center; }
+  .mform.inline .gin { width:auto; flex:1; min-width:150px; }
+  .mnote, .dim { color:var(--mut2); font-size:12.5px; }
+  .credbox { margin-top:14px; padding:12px 14px; border-radius:8px; background:#f4f6f8;
+             border:1px solid #cdd6e0; font-size:13px; line-height:1.6; }
+  .credbox code { display:inline-block; margin-top:6px; padding:6px 10px; background:#fff;
+                  border:1px solid var(--line2); border-radius:6px;
+                  font:14px ui-monospace, SFMono-Regular, monospace; color:var(--navy);
+                  user-select:all; }
+
+  .utab { width:100%; border-collapse:collapse; margin-top:20px; font-size:13px; }
+  .utab th { text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em;
+             color:#8a8f96; padding:8px 10px; border-bottom:1px solid var(--line); }
+  .utab td { padding:11px 10px; border-bottom:1px solid #f1efeb; vertical-align:middle; }
+  .utab .ok  { color:#2f6b45; font-weight:600; }
+  .utab .off { color:#9a3b32; font-weight:600; }
+  .utab .pill { margin-left:6px; }
+  .utab .pill.lock { background:#fdf0ef; color:#9a3b32; }
+  .utab .acts { display:flex; gap:6px; justify-content:flex-end; }
+
   @media (max-width:720px) {
     header, .searchbar { padding-left:18px; padding-right:18px; }
     main { padding:20px 18px 60px; }
     .bar { flex-wrap:wrap; }
     #q { flex-basis:100%; }
     .past { width:100%; }
+    .utab .acts { flex-direction:column; }
   }
 </style>
 </head>
 <body>
 
+<!-- ══ GATE: login / forced password change. Shown until authenticated. ══ -->
+<div id="gate" class="gate" hidden>
+  <div class="gatecard">
+    <h1 class="gtitle">NHPC — Parliamentary Q&amp;A</h1>
+
+    <!-- login -->
+    <form id="loginForm" class="gform">
+      <div class="gsub">Sign in to search past parliamentary questions.</div>
+      <label class="glab" for="li_email">Email</label>
+      <input class="gin" id="li_email" type="email" autocomplete="username" required>
+      <label class="glab" for="li_pw">Password</label>
+      <input class="gin" id="li_pw" type="password" autocomplete="current-password" required>
+      <div id="li_err" class="gerr" hidden></div>
+      <button class="btn gbtn" id="li_go" type="submit">Sign in</button>
+    </form>
+
+    <!-- forced change-password. The SERVER refuses every other endpoint until this is
+         done (403 password_change_required) -- this screen is the convenience, not the
+         control. -->
+    <form id="forceForm" class="gform" hidden>
+      <div class="gsub"><b>Set a new password to continue.</b><br>
+        Your current password was issued to you by an administrator, so it is not yet
+        your own.</div>
+      <label class="glab" for="fc_cur">Current password</label>
+      <input class="gin" id="fc_cur" type="password" autocomplete="current-password" required>
+      <label class="glab" for="fc_new">New password</label>
+      <input class="gin" id="fc_new" type="password" autocomplete="new-password" required>
+      <label class="glab" for="fc_new2">Confirm new password</label>
+      <input class="gin" id="fc_new2" type="password" autocomplete="new-password" required>
+      <div class="ghint">At least 12 characters, mixing three of: lowercase, uppercase,
+        digits, symbols.</div>
+      <div id="fc_err" class="gerr" hidden></div>
+      <button class="btn gbtn" id="fc_go" type="submit">Set password &amp; continue</button>
+    </form>
+  </div>
+</div>
+
+<!-- ══ APP ══ -->
+<div id="app" hidden>
 <header>
-  <div class="wrap">
-    <h1>NHPC — Parliamentary Q&amp;A Retrieval</h1>
-    <div class="sub">Past questions and the answers already given. Results are retrieved, not generated.</div>
+  <div class="wrap hdr">
+    <div>
+      <h1>NHPC — Parliamentary Q&amp;A Retrieval</h1>
+      <div class="sub">Past questions and the answers already given. Results are retrieved, not generated.</div>
+    </div>
+    <div class="whoami">
+      <span id="who_email" class="wemail"></span>
+      <span id="who_role" class="wrole"></span>
+      <!-- Rendered only for admins AND enforced on the server: an officer who forges this
+           button still gets 403 from /admin/*. -->
+      <button class="btn ghost small" id="adminBtn" hidden>Users</button>
+      <button class="btn ghost small" id="pwBtn">Change password</button>
+      <button class="btn ghost small" id="outBtn">Sign out</button>
+    </div>
   </div>
 </header>
 
 <div class="searchbar">
   <div class="wrap" style="position:relative;">
     <div class="bar">
-      <input type="text" id="q" autofocus autocomplete="off"
+      <input type="text" id="q" autocomplete="off"
              aria-label="Search a parliamentary question or topic"
              placeholder="e.g. electricity dues owed by J&amp;K  •  जलविद्युत परियोजना की जानकारी">
       <button class="btn" id="go">Search</button>
@@ -160,22 +274,34 @@
   <div id="diag" hidden></div>
   <div id="out"></div>
 </main>
+</div>
+
+<!-- ══ MODAL: change-my-password / admin user management ══ -->
+<div id="modal" class="modal" hidden>
+  <div class="msheet">
+    <div class="mhead">
+      <span id="m_title"></span>
+      <button class="btn ghost small" id="m_close">Close</button>
+    </div>
+    <div id="m_body"></div>
+  </div>
+</div>
 
 <script>
 const $ = s => document.querySelector(s);
 
 // ---------------------------------------------------------------------------
-// IDENTITY — fixed default, not shown and not editable.
+// IDENTITY comes from the SESSION COOKIE — never from client state.
 //
-// The API's RBAC/audit path is UNCHANGED: it still receives X-User-Id / X-User-Role on
-// every /query, /file and /feedback call, exactly as before. We simply stop asking the
-// officer to type their own identity, which was never a real control (self-asserted).
-// In production the authenticating reverse proxy overwrites these headers.
+// There is no user/role field anywhere in this file any more. The cookie is HttpOnly, so
+// this script CANNOT read it, and that is the point: an XSS bug on this page cannot steal
+// the session. The browser attaches it automatically; the server resolves it to a user
+// and reads that user's role FROM THE DATABASE on every request.
 //
-// TODO: a login system will replace this default — take the identity from the session
-// rather than hardcoding it here.
+// `ME` below is only for deciding what to DRAW. It is not a permission. Every /admin/*
+// call is authorized server-side, so editing ME.role in a console buys nothing but a 403.
 // ---------------------------------------------------------------------------
-const IDENTITY = { user_id: "officer1", user_role: "officer" };
+let ME = null;
 
 let RUN_ID = null;
 
@@ -183,10 +309,31 @@ let RUN_ID = null;
 // sessionStorage. A reload clearing them is acceptable.
 const PAST = [];
 
+// No identity headers. The session cookie is sent automatically by the browser
+// (same-origin), and the server derives who + what-role from it.
 function headers() {
-  return { "Content-Type": "application/json",
-           "X-User-Id": IDENTITY.user_id,
-           "X-User-Role": IDENTITY.user_role };
+  return { "Content-Type": "application/json" };
+}
+
+// Any 401 anywhere means the session died (logout elsewhere, expiry, or an admin
+// deactivating the account MID-SESSION — which takes effect on the very next request,
+// because the session is checked against the DB every time).
+function onUnauthorized() {
+  ME = null;
+  showGate("login");
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, Object.assign({ headers: headers() }, opts));
+  if (r.status === 401) { onUnauthorized(); throw new Error("not authenticated"); }
+  if (r.status === 403) {
+    let d = {};
+    try { d = await r.json(); } catch (_) {}
+    // The server refuses everything until the password is changed. Obey it.
+    if (d.detail === "password_change_required") { showGate("force"); throw new Error("password_change_required"); }
+    throw new Error(d.detail || "forbidden");
+  }
+  return r;
 }
 
 function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
@@ -396,6 +543,229 @@ function drawPast() {
 function openPast()  { drawPast(); $("#pastPanel").hidden = false; $("#recent").setAttribute("aria-expanded", "true"); }
 function closePast() { $("#pastPanel").hidden = true;  $("#recent").setAttribute("aria-expanded", "false"); }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════════════════════════════════════
+function showGate(which) {
+  $("#app").hidden = true;
+  $("#modal").hidden = true;
+  $("#gate").hidden = false;
+  $("#loginForm").hidden = which !== "login";
+  $("#forceForm").hidden = which !== "force";
+  setTimeout(() => $(which === "login" ? "#li_email" : "#fc_cur").focus(), 30);
+}
+
+function showApp() {
+  $("#gate").hidden = true;
+  $("#app").hidden = false;
+  $("#who_email").textContent = ME.email;
+  $("#who_role").textContent = ME.role;
+  $("#who_role").className = "wrole" + (ME.role === "admin" ? " admin" : "");
+  // Drawn for admins only — but the SERVER is what enforces it (see /admin/* -> 403).
+  $("#adminBtn").hidden = ME.role !== "admin";
+  $("#q").focus();
+}
+
+// Who am I? Called on load. Decides gate vs app.
+async function boot() {
+  try {
+    const r = await fetch("/auth/me", { headers: headers() });
+    if (r.status === 401) { showGate("login"); return; }
+    ME = await r.json();
+    if (ME.must_change_password) { showGate("force"); return; }
+    showApp();
+  } catch (e) {
+    showGate("login");
+  }
+}
+
+$("#loginForm").onsubmit = async e => {
+  e.preventDefault();
+  const err = $("#li_err");
+  err.hidden = true;
+  $("#li_go").disabled = true;
+  try {
+    const r = await fetch("/auth/login", {
+      method: "POST", headers: headers(),
+      body: JSON.stringify({ email: $("#li_email").value.trim(),
+                             password: $("#li_pw").value })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      // The server says only "invalid email or password" — for a wrong password, an
+      // unknown account, a locked account and a deactivated one alike. We show exactly
+      // what it said and infer nothing.
+      err.textContent = d.detail || "Sign-in failed.";
+      err.hidden = false;
+      return;
+    }
+    $("#li_pw").value = "";
+    ME = { email: d.email, role: d.role, must_change_password: d.must_change_password };
+    if (d.must_change_password) { showGate("force"); return; }
+    showApp();
+  } finally { $("#li_go").disabled = false; }
+};
+
+$("#forceForm").onsubmit = async e => {
+  e.preventDefault();
+  const err = $("#fc_err");
+  err.hidden = true;
+  const cur = $("#fc_cur").value, nw = $("#fc_new").value, nw2 = $("#fc_new2").value;
+  if (nw !== nw2) { err.textContent = "The two new passwords do not match."; err.hidden = false; return; }
+  $("#fc_go").disabled = true;
+  try {
+    const r = await fetch("/auth/change-password", {
+      method: "POST", headers: headers(),
+      body: JSON.stringify({ current_password: cur, new_password: nw })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { err.textContent = d.detail || "Could not change the password."; err.hidden = false; return; }
+    $("#fc_cur").value = $("#fc_new").value = $("#fc_new2").value = "";
+    await boot();                     // re-read /auth/me: must_change_password is now false
+  } finally { $("#fc_go").disabled = false; }
+};
+
+$("#outBtn").onclick = async () => {
+  await fetch("/auth/logout", { method: "POST", headers: headers() });
+  ME = null;
+  PAST.length = 0;                    // do not leave one user's searches for the next
+  $("#out").innerHTML = "";
+  $("#diag").hidden = true;
+  showGate("login");
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MODAL — change my password / admin user management
+// ═══════════════════════════════════════════════════════════════════════════
+function openModal(title, html) {
+  $("#m_title").textContent = title;
+  $("#m_body").innerHTML = html;
+  $("#modal").hidden = false;
+}
+function closeModal() { $("#modal").hidden = true; }
+$("#m_close").onclick = closeModal;
+$("#modal").onclick = e => { if (e.target === $("#modal")) closeModal(); };
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#modal").hidden) closeModal(); });
+
+$("#pwBtn").onclick = () => {
+  openModal("Change my password", `
+    <form id="cp_form" class="mform">
+      <label class="glab">Current password</label>
+      <input class="gin" id="cp_cur" type="password" autocomplete="current-password" required>
+      <label class="glab">New password</label>
+      <input class="gin" id="cp_new" type="password" autocomplete="new-password" required>
+      <label class="glab">Confirm new password</label>
+      <input class="gin" id="cp_new2" type="password" autocomplete="new-password" required>
+      <div class="ghint">At least 12 characters, mixing three of: lowercase, uppercase, digits, symbols.</div>
+      <div id="cp_msg" class="gerr" hidden></div>
+      <button class="btn" type="submit">Change password</button>
+    </form>`);
+  $("#cp_form").onsubmit = async e => {
+    e.preventDefault();
+    const msg = $("#cp_msg");
+    if ($("#cp_new").value !== $("#cp_new2").value) {
+      msg.textContent = "The two new passwords do not match."; msg.hidden = false; return;
+    }
+    const r = await fetch("/auth/change-password", {
+      method: "POST", headers: headers(),
+      body: JSON.stringify({ current_password: $("#cp_cur").value,
+                             new_password: $("#cp_new").value })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.textContent = d.detail || "Failed."; msg.className = "gerr"; msg.hidden = false; return; }
+    msg.textContent = "Password changed. Your other sessions have been signed out.";
+    msg.className = "gok"; msg.hidden = false;
+    $("#cp_form").reset();
+  };
+};
+
+// ── ADMIN: user management ────────────────────────────────────────────────
+// Hidden for officers — and REFUSED for officers by the server, which is the part that
+// actually matters. Hiding a button is not access control.
+$("#adminBtn").onclick = () => { openModal("User management", '<div class="mnote">Loading…</div>'); loadUsers(); };
+
+async function loadUsers() {
+  let d;
+  try { d = await (await api("/admin/users")).json(); }
+  catch (e) { $("#m_body").innerHTML = `<div class="gerr">${esc(e.message)}</div>`; return; }
+
+  const rows = d.users.map(u => `
+    <tr>
+      <td>${esc(u.email)}</td>
+      <td><span class="wrole ${u.role === "admin" ? "admin" : ""}">${esc(u.role)}</span></td>
+      <td>${u.is_active ? '<span class="ok">active</span>' : '<span class="off">disabled</span>'}
+          ${u.must_change_password ? '<span class="pill">must change pw</span>' : ""}
+          ${u.locked ? '<span class="pill lock">locked</span>' : ""}</td>
+      <td class="dim">${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "never"}</td>
+      <td class="acts">
+        <button class="btn ghost small" data-act="reset" data-id="${u.user_id}" data-em="${esc(u.email)}">Reset password</button>
+        ${u.is_active
+          ? `<button class="btn ghost small danger" data-act="off" data-id="${u.user_id}" data-em="${esc(u.email)}">Deactivate</button>`
+          : `<button class="btn ghost small" data-act="on" data-id="${u.user_id}" data-em="${esc(u.email)}">Reactivate</button>`}
+      </td>
+    </tr>`).join("");
+
+  $("#m_body").innerHTML = `
+    <form id="nu_form" class="mform inline">
+      <input class="gin" id="nu_email" type="email" placeholder="new user's email" required>
+      <select class="gin" id="nu_role"><option value="officer">officer</option><option value="admin">admin</option></select>
+      <input class="gin" id="nu_pw" type="text" placeholder="initial password (blank = generate)">
+      <button class="btn" type="submit">Create user</button>
+    </form>
+    <div id="nu_msg" hidden></div>
+    <table class="utab"><thead><tr>
+      <th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+
+  $("#nu_form").onsubmit = async e => {
+    e.preventDefault();
+    const msg = $("#nu_msg");
+    try {
+      const r = await api("/admin/users", { method: "POST", headers: headers(),
+        body: JSON.stringify({ email: $("#nu_email").value.trim(),
+                               role: $("#nu_role").value,
+                               password: $("#nu_pw").value || undefined }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || "failed");
+      // The generated password is shown ONCE, here, to the admin who just created the
+      // account. It is not stored anywhere in recoverable form.
+      msg.className = "credbox";
+      msg.innerHTML = d.initial_password
+        ? `<b>User created.</b> Give this password to <b>${esc(d.email)}</b> out of band —
+           it is shown once and cannot be recovered:<br><code>${esc(d.initial_password)}</code>
+           <div class="dim">They must change it on first sign-in.</div>`
+        : `<b>User created:</b> ${esc(d.email)}. They must change the password you set on first sign-in.`;
+      msg.hidden = false;
+      $("#nu_form").reset();
+      const keep = msg.innerHTML, kc = msg.className;
+      await loadUsers();
+      $("#nu_msg").innerHTML = keep; $("#nu_msg").className = kc; $("#nu_msg").hidden = false;
+    } catch (err) {
+      msg.className = "gerr"; msg.textContent = err.message; msg.hidden = false;
+    }
+  };
+
+  $("#m_body").querySelectorAll("button[data-act]").forEach(b => b.onclick = async () => {
+    const { act, id, em } = b.dataset;
+    const path = act === "reset" ? `/admin/users/${id}/reset-password`
+               : act === "off"   ? `/admin/users/${id}/deactivate`
+                                 : `/admin/users/${id}/reactivate`;
+    if (act === "off" && !confirm(`Deactivate ${em}?\n\nThey will be signed out immediately.`)) return;
+    try {
+      const r = await api(path, { method: "POST", headers: headers(), body: "{}" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || "failed");
+      const keep = d.temporary_password
+        ? `<div class="credbox"><b>Temporary password for ${esc(em)}</b> — shown once,
+           hand it over out of band:<br><code>${esc(d.temporary_password)}</code>
+           <div class="dim">All their sessions were signed out. They must change it on next sign-in.</div></div>`
+        : "";
+      await loadUsers();
+      if (keep) { $("#nu_msg").innerHTML = keep; $("#nu_msg").className = ""; $("#nu_msg").hidden = false; }
+    } catch (err) { alert(err.message); }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // WIRING
 // ---------------------------------------------------------------------------
@@ -425,6 +795,9 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closePast();
 $("#out").innerHTML = `<div class="empty"><div class="big">🔍</div>
   <div class="t">Search past parliamentary questions</div>
   <div class="d">Results are retrieved from what's already on file — nothing is generated.</div></div>`;
+
+// Ask the server who we are. Gate or app; nothing is decided client-side.
+boot();
 </script>
 </body>
 </html>

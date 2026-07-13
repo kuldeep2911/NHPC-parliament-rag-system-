@@ -33,6 +33,12 @@ dependencies = [
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.30,<1",
 
+    # --- auth -----------------------------------------------------------------
+    # Argon2id (OWASP's current recommendation for password hashing): memory-hard, so a
+    # GPU farm buys far less than it would against bcrypt. The encoded hash carries its
+    # own params, so the cost can be raised later without invalidating existing hashes.
+    "argon2-cffi>=23.1,<26",
+
     # --- watcher --------------------------------------------------------------
     "watchdog>=4,<7",
 ]
