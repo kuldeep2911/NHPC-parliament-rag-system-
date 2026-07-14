@@ -55,7 +55,9 @@ _MONTHS = {
 
 # \s* around every separator is not paranoia: the PDF text layer inserts spaces mid-token
 # ("0 6 . 0 2 . 2 0 2 4"), so a strict \d{2}\.\d{2} misses real matches. Measured.
-_NUMERIC = r"\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{2,4}"
+# \d{2,5}: a 5-digit year is a source-document TYPO ("03.02.02022"), repaired in
+# _parse(). The regex has to match it before it can be repaired.
+_NUMERIC = r"\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{2,5}"
 _NAMED = r"\d{1,2}\s*(?:st|nd|rd|th)?\s*[-\s]\s*[A-Za-z]{3,9}\.?\s*,?\s*[-\s]?\s*\d{2,4}"
 _ISO = r"\d{4}-\d{2}-\d{2}"
 _DATE = rf"({_ISO}|{_NUMERIC}|{_NAMED})"
@@ -88,6 +90,14 @@ def _parse(raw: str, session_year: int | None = None):
     s = re.sub(r"\s+", "", str(raw or ""))
     if not s:
         return None
+
+    # TYPOS IN THE SOURCE DOCUMENT. A real header reads "for answer on 03.02.02022" -- the
+    # year is typed with a stray leading zero. This is not ambiguous and it is not a guess:
+    # 02022 can only be 2022. Rejecting it loses a date that is plainly there.
+    #
+    # Only a LEADING zero on a 5-digit year is repaired. Anything else stays rejected --
+    # we are correcting an obvious slip, not inventing a plausible number.
+    s = re.sub(r"(?<![\d])0(\d{4})(?![\d])", r"\1", s)
 
     # ISO first -- that is what we ask the model for.
     m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
