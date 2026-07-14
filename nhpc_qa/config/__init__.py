@@ -44,12 +44,13 @@ from nhpc_qa.config.parse import Config as ParseConfig       # parser, LLM, trac
 from nhpc_qa.config.index import Phase3Config as IndexConfig  # DB, embeddings
 from nhpc_qa.config.retrieval import Phase4Config as RetrievalConfig   # retrieval, rerank, API
 from nhpc_qa.config.auth import AuthConfig                    # sessions, Argon2, lockout
+from nhpc_qa.config.upload import UploadConfig                # admin upload intake
 
 from nhpc_qa.config.parse import load_dotenv                  # noqa: F401 (re-export)
 
 
 @dataclass
-class Settings(RetrievalConfig, ParseConfig, AuthConfig):
+class Settings(RetrievalConfig, ParseConfig, AuthConfig, UploadConfig):
     """
     The single application config. Inherits every field of all four trees.
 
@@ -78,6 +79,9 @@ class Settings(RetrievalConfig, ParseConfig, AuthConfig):
         # cookie is tolerable, so it is passed in rather than re-read from the env.
         errs += [e for e in self.validate_auth(host=getattr(self, "api_host", None))
                  if e not in errs]
+        # upload (no-op when UPLOAD_ENABLED=false). Catches a staging dir on a different
+        # volume, which would silently make the move into the source tree non-atomic.
+        errs += [e for e in self.validate_upload() if e not in errs]
         return _dedup(errs)
 
     def describe_all(self) -> dict:

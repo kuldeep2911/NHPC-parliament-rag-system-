@@ -200,6 +200,56 @@
   .utab .pill.lock { background:#fdf0ef; color:#9a3b32; }
   .utab .acts { display:flex; gap:6px; justify-content:flex-end; }
 
+  /* ── upload ────────────────────────────────────────────────────────────── */
+  .uphead { font-size:13px; color:var(--mut); line-height:1.55; margin-bottom:16px;
+            padding:11px 14px; background:#f4f6f8; border-radius:8px;
+            border:1px solid #e3e8ee; }
+  .uppick { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .uppick .btn { cursor:pointer; }
+  .upsum { margin-top:16px; font-size:13px; color:#40464e; }
+  .uptab { margin-top:8px; display:block; max-height:260px; overflow-y:auto; }
+  .uptab .fp { font-family:ui-monospace, SFMono-Regular, monospace; font-size:12px;
+               word-break:break-all; }
+  .uptab .badrow { background:#fdf7f6; }
+  #up_bar { margin-top:16px; height:8px; background:#eceae5; border-radius:20px;
+            overflow:hidden; }
+  #up_fill { height:100%; width:0; background:var(--navy); border-radius:20px;
+             transition:width .18s; }
+  #up_actions { display:flex; gap:8px; margin-top:16px; }
+  #up_msg { margin-top:16px; }
+  .upstat { margin-top:10px; font-size:12.5px; color:#40464e; }
+  .conf { margin:8px 0 10px; padding-left:20px; font-size:12.5px; line-height:1.6;
+          font-family:ui-monospace, SFMono-Regular, monospace; }
+  .uph4 { margin:26px 0 0; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em;
+          color:#8a8f96; }
+
+  /* ── source tree ───────────────────────────────────────────────────────── */
+  .crumbs { font-size:13px; color:#40464e; margin-bottom:6px; display:flex;
+            align-items:center; gap:6px; flex-wrap:wrap; }
+  .crumbs a { color:var(--navy); text-decoration:none; font-weight:500; }
+  .crumbs a:hover { text-decoration:underline; }
+  .crumbs .sep { color:#c3c1ba; }
+  .crumbs .lvl { margin-left:6px; font-size:11px; font-weight:600; text-transform:uppercase;
+                 letter-spacing:.04em; padding:2px 8px; border-radius:20px;
+                 background:#eceae5; color:#767c83; }
+  .treehint { font-size:12.5px; color:var(--mut2); margin-bottom:8px; }
+  .treebox { border:1px solid var(--line2); border-radius:9px; max-height:260px;
+             overflow-y:auto; background:#fff; margin-bottom:18px; }
+  .trow { display:flex; align-items:center; gap:10px; padding:8px 12px;
+          border-bottom:1px solid #f4f2ee; font-size:13px; }
+  .trow:last-child { border-bottom:0; }
+  .trow:hover { background:#faf9f7; }
+  .trow.up { background:#f7f7f5; }
+  .trow .tname { flex:1; min-width:0; color:var(--navy); text-decoration:none;
+                 font-weight:500; white-space:nowrap; overflow:hidden;
+                 text-overflow:ellipsis; }
+  .trow .tname:hover { text-decoration:underline; }
+  .trow .tname.file { color:#40464e; font-weight:400; text-decoration:none; cursor:default; }
+  .trow .tname.file:hover { text-decoration:none; }
+
+  .pager { display:flex; align-items:center; justify-content:center; gap:14px;
+           margin-top:12px; }
+
   @media (max-width:720px) {
     header, .searchbar { padding-left:18px; padding-right:18px; }
     main { padding:20px 18px 60px; }
@@ -262,6 +312,7 @@
       <span id="who_role" class="wrole"></span>
       <!-- Rendered only for admins AND enforced on the server: an officer who forges this
            button still gets 403 from /admin/*. -->
+      <button class="btn ghost small" id="uploadBtn" hidden>Upload</button>
       <button class="btn ghost small" id="adminBtn" hidden>Users</button>
       <button class="btn ghost small" id="pwBtn">Change password</button>
       <button class="btn ghost small" id="outBtn">Sign out</button>
@@ -576,6 +627,7 @@ function showApp() {
   $("#who_role").className = "wrole" + (ME.role === "admin" ? " admin" : "");
   // Drawn for admins only — but the SERVER is what enforces it (see /admin/* -> 403).
   $("#adminBtn").hidden = ME.role !== "admin";
+  $("#uploadBtn").hidden = ME.role !== "admin";
   $("#q").focus();
 }
 
@@ -696,6 +748,312 @@ $("#pwBtn").onclick = () => {
 // Hidden for officers — and REFUSED for officers by the server, which is the part that
 // actually matters. Hiding a button is not access control.
 $("#adminBtn").onclick = () => { openModal("User management", '<div class="mnote">Loading…</div>'); loadUsers(); };
+
+// ── ADMIN: upload a session folder ────────────────────────────────────────
+// Admin-only in the UI, and ADMIN-ONLY ON THE SERVER (require_admin -> 403). Hiding the
+// button is presentation; the 403 is the control.
+const ALLOWED_EXT = ["pdf", "doc", "docx", "xls", "xlsx", "txt"];
+let PICKED = [];      // [{file, path}]
+
+// DEST is the folder in the source tree the admin is looking at. Uploads land INSIDE it,
+// and Delete acts ON it. "" = the source root (where a whole new session goes).
+let DEST = "";
+let UP_PAGE = 1;
+
+$("#uploadBtn").onclick = () => {
+  openModal("Source data", `
+    <div class="uphead">
+      Uploaded files are written into the source data directory; the <b>existing</b>
+      incremental pipeline then picks them up on its own — organise → parse → embed →
+      index. Deleting removes the files <b>and</b> the indexed documents, so they stop
+      appearing in search immediately.
+    </div>
+
+    <div id="tree"></div>
+
+    <div class="uppick">
+      <!-- webkitdirectory gives the whole folder tree; each File carries a
+           webkitRelativePath, which is what preserves the nesting the crawler needs. -->
+      <label class="btn ghost">Upload folder…
+        <input type="file" id="up_dir" webkitdirectory directory multiple hidden></label>
+      <label class="btn ghost">Upload files…
+        <input type="file" id="up_files" multiple hidden
+               accept=".pdf,.doc,.docx,.xls,.xlsx,.txt"></label>
+      <span class="dim" id="up_destnote"></span>
+    </div>
+
+    <div id="up_list"></div>
+    <div id="up_bar" hidden><div id="up_fill"></div></div>
+    <div id="up_msg" hidden></div>
+
+    <div id="up_actions" hidden>
+      <button class="btn" id="up_go">Upload &amp; process</button>
+      <button class="btn ghost" id="up_clear">Clear</button>
+    </div>
+
+    <div id="up_recent"></div>`);
+
+  PICKED = []; DEST = ""; UP_PAGE = 1;
+  $("#up_dir").onchange   = e => pick(e.target.files);
+  $("#up_files").onchange = e => pick(e.target.files);
+  $("#up_clear").onclick  = () => { PICKED = []; drawPicked(); $("#up_msg").hidden = true; };
+  $("#up_go").onclick     = () => doUpload("fail");
+  loadTree("");
+  loadRecentUploads();
+};
+
+// ── the source tree ───────────────────────────────────────────────────────
+// Lazily, one level per click. The corpus is 5,000+ files; walking the whole tree on every
+// open would be slow and would show the admin more than they can read.
+async function loadTree(path) {
+  const el = $("#tree");
+  if (!el) return;
+  let d;
+  try { d = await (await api("/admin/tree?path=" + encodeURIComponent(path || ""))).json(); }
+  catch (e) { el.innerHTML = `<div class="gerr">${esc(e.message)}</div>`; return; }
+
+  DEST = d.path;
+  const crumbs = [`<a href="#" data-go="">Original Data</a>`];
+  const segs = d.path ? d.path.split("/") : [];
+  segs.forEach((s, i) => crumbs.push(
+    `<a href="#" data-go="${esc(segs.slice(0, i + 1).join("/"))}">${esc(s)}</a>`));
+
+  // What the admin may do HERE depends on the level, because the crawler needs
+  // <session>/<house>/<question>/ — a loose file at the root can never be ingested.
+  const canUploadFiles = d.depth >= 3;
+  const hint = d.depth === 0 ? "Upload a whole <b>session folder</b> here, or open a session."
+             : d.depth === 1 ? "Open a house (Lok Sabha / Rajya Sabha), or upload a house folder."
+             : d.depth === 2 ? "Open a question folder, or upload one (named by its diary number)."
+             : "You can upload individual files into this question folder.";
+
+  el.innerHTML = `
+    <div class="crumbs">${crumbs.join(' <span class="sep">/</span> ')}
+      <span class="lvl">${esc(d.level)}</span></div>
+    <div class="treehint">${hint}</div>
+    <div class="treebox">
+      ${d.path ? `<div class="trow up"><a href="#" data-go="${esc(d.parent || "")}">⬆ up</a></div>` : ""}
+      ${d.dirs.map(x => `<div class="trow">
+          <a href="#" class="tname" data-go="${esc(x.path)}">📁 ${esc(x.name)}</a>
+          ${x.ingestible === false
+            ? '<span class="off" title="The crawler cannot read a session year from this name, so nothing in it will ever be ingested.">unreadable session name</span>' : ""}
+          <button class="btn ghost small danger" data-del="${esc(x.path)}">Delete</button>
+        </div>`).join("")}
+      ${d.files.map(x => `<div class="trow">
+          <span class="tname file">📄 ${esc(x.name)}</span>
+          <span class="dim">${human(x.size || 0)}</span>
+          <button class="btn ghost small danger" data-del="${esc(x.path)}">Delete</button>
+        </div>`).join("")}
+      ${(!d.dirs.length && !d.files.length) ? '<div class="mnote">(empty)</div>' : ""}
+    </div>`;
+
+  el.querySelectorAll("a[data-go]").forEach(a => a.onclick = e => {
+    e.preventDefault(); PICKED = []; drawPicked(); loadTree(a.dataset.go);
+  });
+  el.querySelectorAll("button[data-del]").forEach(b => b.onclick = () => del(b.dataset.del));
+
+  $("#up_destnote").innerHTML = d.path
+    ? `Uploading into <b>${esc(d.path)}</b>`
+    : `Uploading to the <b>top level</b> (a new session folder)`;
+  $("#up_files").disabled = !canUploadFiles;
+  drawPicked();
+}
+
+// ── delete — HARD and irreversible ────────────────────────────────────────
+async function del(path) {
+  // Confirm with the PATH TYPED BACK, not a bare yes/no: this destroys parliamentary
+  // records and their embeddings, and there is no undo.
+  const typed = prompt(
+    `PERMANENTLY DELETE\n\n  ${path}\n\n` +
+    `The files AND the indexed documents (answers, tables, embeddings) will be removed. ` +
+    `They will stop appearing in search immediately. This cannot be undone.\n\n` +
+    `Type the path exactly to confirm:`);
+  if (typed === null) return;
+  if (typed.trim() !== path) { alert("That does not match. Nothing was deleted."); return; }
+
+  try {
+    const r = await api(`/admin/tree?path=${encodeURIComponent(path)}`
+                        + `&confirm=${encodeURIComponent(path)}`, { method: "DELETE" });
+    const d = await r.json();
+    const msg = $("#up_msg");
+    msg.className = "gok";
+    msg.innerHTML = `<b>Deleted ${esc(path)}.</b><br>
+      ${d.files_removed} file(s) removed · <b>${d.documents_removed}</b> document(s) and
+      ${d.sub_questions_removed} embedding(s) destroyed
+      ${d.queued_jobs_cancelled ? ` · ${d.queued_jobs_cancelled} queued job(s) cancelled` : ""}
+      <div class="dim">${esc(d.message)}</div>`;
+    msg.hidden = false;
+    loadTree(DEST.startsWith(path) ? (path.split("/").slice(0, -1).join("/")) : DEST);
+  } catch (e) {
+    alert("Delete failed: " + e.message);
+  }
+}
+
+function pick(fileList) {
+  for (const f of fileList) {
+    // webkitRelativePath is the folder structure the admin selected. It is preserved
+    // as-is: the real corpus is messy ("PARLIAMENT FEB MAR 24/likely issues/...") and the
+    // crawler already infers session/house from whatever it finds. Normalising it here
+    // would break that inference.
+    const path = f.webkitRelativePath || f.name;
+    if (!PICKED.some(p => p.path === path)) PICKED.push({ file: f, path });
+  }
+  drawPicked();
+}
+
+function extOf(p) { const i = p.lastIndexOf("."); return i < 0 ? "" : p.slice(i + 1).toLowerCase(); }
+function human(b) { return b < 1024 ? b + " B" : b < 1048576 ? (b/1024).toFixed(0) + " KB"
+                                                            : (b/1048576).toFixed(1) + " MB"; }
+
+function drawPicked() {
+  const el = $("#up_list");
+  if (!PICKED.length) { el.innerHTML = ""; $("#up_actions").hidden = true; return; }
+
+  // Show what WILL and will NOT be sent, before anything leaves the browser. The server
+  // re-checks all of this -- this is courtesy, not security.
+  const rows = PICKED.map((p, i) => {
+    const bad = !ALLOWED_EXT.includes(extOf(p.path));
+    return `<tr class="${bad ? "badrow" : ""}">
+      <td class="fp">${esc(p.path)}</td>
+      <td class="dim">${human(p.file.size)}</td>
+      <td>${bad ? '<span class="off">not an allowed type</span>' : '<span class="ok">ok</span>'}</td>
+      <td><button class="btn ghost small" data-rm="${i}">×</button></td></tr>`;
+  }).join("");
+
+  const bad = PICKED.filter(p => !ALLOWED_EXT.includes(extOf(p.path))).length;
+  const total = PICKED.reduce((a, p) => a + p.file.size, 0);
+  el.innerHTML = `<div class="upsum"><b>${PICKED.length}</b> file(s), ${human(total)}
+      ${bad ? `<span class="off"> · ${bad} will be refused</span>` : ""}</div>
+    <table class="utab uptab"><tbody>${rows}</tbody></table>`;
+  el.querySelectorAll("button[data-rm]").forEach(b =>
+    b.onclick = () => { PICKED.splice(+b.dataset.rm, 1); drawPicked(); });
+  $("#up_actions").hidden = false;
+}
+
+async function doUpload(onConflict) {
+  const msg = $("#up_msg"), bar = $("#up_bar"), fill = $("#up_fill");
+  msg.hidden = true;
+  $("#up_go").disabled = true;
+  bar.hidden = false; fill.style.width = "0%";
+
+  const fd = new FormData();
+  for (const p of PICKED) { fd.append("files", p.file, p.file.name); fd.append("paths", p.path); }
+  // The folder the admin is browsing. Files land INSIDE it, so "Upload files…" finally has
+  // a meaningful destination instead of dropping a loose file at the source root.
+  fd.append("dest", DEST);
+  fd.append("on_conflict", onConflict);
+
+  // XHR, not fetch: fetch gives no upload progress events, and a session folder can be
+  // hundreds of MB. The admin must see it moving.
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/admin/upload");
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable) fill.style.width = Math.round(e.loaded / e.total * 100) + "%";
+  };
+  xhr.onload = () => {
+    $("#up_go").disabled = false;
+    bar.hidden = true;
+    let d = {};
+    try { d = JSON.parse(xhr.responseText); } catch (_) {}
+    const detail = d.detail || {};
+
+    if (xhr.status === 403) {
+      msg.className = "gerr"; msg.textContent = "Administrator access required.";
+      msg.hidden = false; return;
+    }
+    if (xhr.status === 409) {
+      // NEVER a silent overwrite. The admin chooses.
+      msg.className = "credbox";
+      msg.innerHTML = `<b>These files already exist in the source data.</b>
+        <div class="dim">Nothing was written.</div>
+        <ul class="conf">${(detail.conflicts || []).map(c => `<li>${esc(c)}</li>`).join("")}</ul>
+        <button class="btn ghost small" id="up_skip">Upload only the new files</button>
+        <button class="btn ghost small danger" id="up_repl">Replace the existing files</button>`;
+      msg.hidden = false;
+      $("#up_skip").onclick = () => doUpload("skip");
+      $("#up_repl").onclick = () => {
+        if (confirm("Overwrite the existing source files?\n\nThis is logged and cannot be undone."))
+          doUpload("replace");
+      };
+      return;
+    }
+    if (xhr.status >= 400) {
+      // All-or-nothing: a rejected upload wrote NOTHING.
+      msg.className = "gerr";
+      msg.innerHTML = `<b>${esc(detail.message || d.detail || "Upload refused.")}</b>
+        ${detail.detail ? `<div class="dim">${esc(detail.detail)}</div>` : ""}
+        <ul class="conf">${(detail.rejected || []).map(r =>
+          `<li>${esc(r.client_path)} — ${esc(r.reason)}</li>`).join("")}</ul>`;
+      msg.hidden = false;
+      return;
+    }
+
+    msg.className = "gok";
+    msg.innerHTML = `<b>${d.accepted} file(s) uploaded.</b> ${esc(d.message)}
+      ${d.skipped ? `<div class="dim">${d.skipped} skipped (already present).</div>` : ""}
+      <div class="dim">Queued: ${(d.queued_folders || []).map(esc).join(", ") || "—"}</div>
+      <div id="up_status" class="upstat">Checking processing status…</div>`;
+    msg.hidden = false;
+    PICKED = []; drawPicked();
+    pollStatus(d.upload_id);
+    loadTree(DEST);
+    UP_PAGE = 1;
+    loadRecentUploads();
+  };
+  xhr.onerror = () => {
+    $("#up_go").disabled = false; bar.hidden = true;
+    msg.className = "gerr"; msg.textContent = "Upload failed (network)."; msg.hidden = false;
+  };
+  xhr.send(fd);
+}
+
+// Status comes from the pipeline's OWN records (sync_queue + sync_log) -- no invented state.
+async function pollStatus(uploadId, tries = 0) {
+  const el = $("#up_status");
+  if (!el) return;
+  try {
+    const d = await (await api(`/admin/upload/${uploadId}/status`)).json();
+    const jobs = (d.jobs || []).map(j => `${j.folder}: <b>${j.status}</b>`
+                                          + (j.error ? ` — ${esc(j.error)}` : "")).join("<br>");
+    el.innerHTML = `Status: <b>${esc(d.status)}</b>`
+      + (d.documents_indexed ? ` · ${d.documents_indexed} document(s) indexed` : "")
+      + (jobs ? `<div class="dim">${jobs}</div>` : "")
+      + (d.watcher_running ? "" :
+         `<div class="off">No watcher is running — the work is queued and safe, but nothing
+          is processing it. Start the nhpc-watch service.</div>`);
+    if (["done", "failed"].includes(d.status) || tries > 60) return;
+    setTimeout(() => pollStatus(uploadId, tries + 1), 5000);
+  } catch (e) { el.textContent = "Status unavailable."; }
+}
+
+async function loadRecentUploads() {
+  try {
+    // 5 per page, paginated SERVER-side. The upload history only grows -- fetching all of
+    // it to show five rows would get slower every week.
+    const d = await (await api(`/admin/uploads?page=${UP_PAGE}&per_page=5`)).json();
+    const el = $("#up_recent");
+    if (!el) return;
+    if (!d.total) { el.innerHTML = ""; return; }
+    el.innerHTML = `<h4 class="uph4">Recent uploads</h4>
+      <table class="utab"><thead><tr><th>When</th><th>By</th><th>Files</th>
+        <th>Outcome</th><th>Folders</th></tr></thead><tbody>
+      ${d.uploads.map(u => `<tr>
+        <td class="dim">${new Date(u.at).toLocaleString()}</td>
+        <td>${esc(u.by)}</td>
+        <td>${u.accepted}${u.rejected ? ` <span class="off">(${u.rejected} rejected)</span>` : ""}</td>
+        <td>${u.outcome === "accepted" ? '<span class="ok">accepted</span>'
+                                       : `<span class="off">${esc(u.outcome)}</span>`}</td>
+        <td class="dim">${(u.folders || []).map(esc).join("<br>") || "—"}</td>
+      </tr>`).join("")}</tbody></table>
+      <div class="pager">
+        <button class="btn ghost small" id="up_prev" ${d.has_prev ? "" : "disabled"}>‹ Prev</button>
+        <span class="dim">Page ${d.page} of ${d.pages} · ${d.total} upload${d.total === 1 ? "" : "s"}</span>
+        <button class="btn ghost small" id="up_next" ${d.has_next ? "" : "disabled"}>Next ›</button>
+      </div>`;
+    const prev = $("#up_prev"), next = $("#up_next");
+    if (prev) prev.onclick = () => { if (UP_PAGE > 1) { UP_PAGE--; loadRecentUploads(); } };
+    if (next) next.onclick = () => { if (UP_PAGE < d.pages) { UP_PAGE++; loadRecentUploads(); } };
+  } catch (e) { /* the modal may have closed */ }
+}
 
 async function loadUsers() {
   let d;

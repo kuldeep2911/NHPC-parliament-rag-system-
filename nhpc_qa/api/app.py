@@ -44,7 +44,7 @@ from nhpc_qa.retrieval.graph.build import build_graph
 from nhpc_qa.core.trace.query_tracer import QueryTracer
 from nhpc_qa.core.providers.rerank import get_reranker
 from nhpc_qa.retrieval.search import entity
-from nhpc_qa.api import auth_routes
+from nhpc_qa.api import auth_routes, tree_routes, upload_routes
 from nhpc_qa.api.security import audit, deps, paths, rbac, users
 
 log = logging.getLogger("nhpc.phase4.api")
@@ -121,6 +121,12 @@ app = FastAPI(title="NHPC Parliamentary Q&A — Retrieval", version="1.0",
 # /auth/* and /admin/*. Every /admin route is behind require_admin, which reads the role
 # from the DATABASE via the session cookie -- never from the request.
 app.include_router(auth_routes.router)
+# /admin/upload — the intake path in FRONT of the existing pipeline. It writes files and
+# calls queue.enqueue(); it does not parse, embed or index anything itself.
+app.include_router(upload_routes.router)
+# /admin/tree — browse the source tree, and HARD-delete from it. Deliberate and audited;
+# distinct from the watcher's soft delete, which reacts to an AMBIGUOUS filesystem event.
+app.include_router(tree_routes.router)
 
 
 def identity(request: Request):

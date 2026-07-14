@@ -26,7 +26,7 @@ import re
 import sys
 
 from nhpc_qa.core.logging import get_logger, setup as setup_logging
-from nhpc_qa.watcher import queue as q
+from nhpc_qa.core import queue as q
 
 log = get_logger("nhpc.purge")
 

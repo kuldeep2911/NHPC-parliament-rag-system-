@@ -209,6 +209,22 @@ def _skip_top_level(d: Path, out_root: Path) -> bool:
     )
 
 
+# The plausible range for a parliamentary session year. THE SINGLE SOURCE OF TRUTH --
+# every error message that quotes these bounds reads them from here, so the rule and what
+# we tell the user can never drift apart. (They already had: the range lived here and was
+# restated as a literal in three other files.)
+#
+# The bound is not decoration. A folder name is full of digits that are NOT years -- diary
+# numbers, capacities, dates -- and without a range 'PARLIAMENT DEC-JAN 1915' would parse
+# as the year 1915 and produce the session slug '1915-dec-jan'. A range keeps a number
+# that cannot be a session year from silently becoming one.
+#
+# 2000..2050 is deliberately generous: it costs nothing to accept an old digitised session,
+# and the point of the check is only to reject the absurd.
+SESSION_YEAR_MIN = 2000
+SESSION_YEAR_MAX = 2050
+
+
 def normalize_session(name: str):
     """
     Return (session_slug, review_reason_or_None).
@@ -225,7 +241,7 @@ def normalize_session(name: str):
     for yy in re.findall(r"(?<!\d)((?:19|20)?\d{2})(?!\d)", name):
         yy_i = int(yy)
         years.append(2000 + yy_i if yy_i < 100 else yy_i)
-    years = [y for y in years if 2015 <= y <= 2035]  # plausible session years
+    years = [y for y in years if SESSION_YEAR_MIN <= y <= SESSION_YEAR_MAX]
 
     months = []
     for tok in re.findall(r"[a-zA-Z]+", low):

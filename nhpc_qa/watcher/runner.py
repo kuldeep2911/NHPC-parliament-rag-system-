@@ -30,7 +30,7 @@ import threading
 import time
 
 from nhpc_qa.core.logging import get_logger, setup as setup_logging
-from nhpc_qa.watcher import queue as q
+from nhpc_qa.core import queue as q
 from nhpc_qa.watcher import sync
 
 log = get_logger("nhpc.watcher")
@@ -42,9 +42,28 @@ _IGNORE = (".tmp", ".swp", ".crdownload", ".part", "~$")
 
 
 def _ignored(path: str) -> bool:
-    name = os.path.basename(path)
-    if name.startswith(".") or name.startswith("~$"):
-        return True
+    """
+    Should this path never trigger a pipeline run?
+
+    ⚠️ ANY dot-component, not just the basename. This used to check only
+    os.path.basename(path), which meant a file inside a dot-DIRECTORY was NOT ignored:
+
+        .upload_staging/PARLIAMENT MAR 26/LOK SABHA/1234/reply.pdf
+        ^^^^^^^^^^^^^^^ dotted dir            basename is 'reply.pdf' -> not ignored
+
+    The admin upload endpoint stages files under <source_root>/.upload_staging before
+    atomically moving them into place. With the basename-only check the watcher would
+    enqueue those files WHILE THEY WERE STILL BEING WRITTEN -- exactly the half-copied
+    parse that the staging + atomic-move design exists to prevent. Ignoring the whole
+    dotted subtree closes that.
+    """
+    parts = os.path.normpath(path).replace("\\", "/").split("/")
+    for seg in parts:
+        if seg.startswith(".") and seg not in (".", ".."):
+            return True
+        if seg.startswith("~$"):            # Word/Excel lock files
+            return True
+    name = parts[-1] if parts else ""
     return any(name.endswith(x) for x in _IGNORE)
 
 
@@ -76,15 +95,37 @@ def _make_handler(cfg, conn_factory):
 
         # A created/modified/moved path is an upsert; the pipeline is idempotent, so we do
         # not try to distinguish "new" from "changed" here.
+        #
+        # ⚠️ DIRECTORY creation is IGNORED, and that is not an optimisation -- it is a
+        # correctness fix. question_folder() maps a path to AT MOST session/house/question,
+        # but it cannot INVENT depth it was not given: handed the bare session directory it
+        # returns the SESSION, and the resulting job re-crawls every question in it.
+        #
+        # Creating one nested question folder fires on_created for each new directory
+        # level, so a single upload of
+        #     PARLIAMENT MAR APR 26/LOK SABHA/9911/reply.pdf
+        # enqueued THREE overlapping jobs -- the session, the house, and the question. They
+        # are distinct source_path values, so the queue's ON CONFLICT dedup cannot see that
+        # they are nested, and the session-level job then re-crawls the whole session while
+        # the question-level job waits behind it. (Observed: a job stuck 'processing' for
+        # 10+ minutes, blocking the upload's own job.)
+        #
+        # A directory is EMPTY at the moment it is created. Nothing is lost by ignoring it:
+        # every file that lands inside it fires its own event, and each of those carries
+        # the full depth question_folder() needs. on_modified already had this guard.
         def on_created(self, e):
-            self._enqueue(e.src_path, "upsert")
+            if not e.is_directory:
+                self._enqueue(e.src_path, "upsert")
 
         def on_modified(self, e):
             if not e.is_directory:
                 self._enqueue(e.src_path, "upsert")
 
         def on_moved(self, e):
-            # the destination is an upsert; the source may now be gone
+            # A directory MOVE is different from a directory CREATE: a moved-in folder
+            # arrives with its files already inside, and those files fire no events of
+            # their own. So a moved directory must still be enqueued -- but on its
+            # question folder, which for a deep move is exactly what question_folder gives.
             self._enqueue(e.dest_path, "upsert")
             self._enqueue(e.src_path, "delete")
 
@@ -93,6 +134,36 @@ def _make_handler(cfg, conn_factory):
             self._enqueue(e.src_path, "delete")
 
     return Handler()
+
+
+# ---------------------------------------------------------------------------
+# heartbeat half — "I am alive", independent of whether work is in progress
+# ---------------------------------------------------------------------------
+
+def _heartbeat_loop(cfg, source):
+    """
+    Beat on a fixed cadence, on its OWN connection, until _STOP.
+
+    Deliberately independent of the work loop. The API asks "is a watcher running?" and
+    must get the truth even while a single job is spending three minutes inside Docling +
+    the LLM + the embedder. Tying the beat to the work loop would make a BUSY watcher look
+    like a DEAD one.
+    """
+    from nhpc_qa.core.db.session import connect
+
+    interval = max(5, min(cfg.watch_poll_seconds, q.HEARTBEAT_STALE_SECONDS // 3))
+    while not _STOP.is_set():
+        try:
+            with connect(cfg) as hb_conn:
+                while not _STOP.is_set():
+                    q.heartbeat(hb_conn, source_root=source)
+                    _STOP.wait(interval)
+        except Exception:       # noqa: BLE001
+            # A dropped DB connection must not kill the beat: back off and reconnect.
+            # (If the DB is genuinely down, the API cannot read the heartbeat either, so
+            # nothing is misreported -- it just cannot answer.)
+            log.exception("heartbeat connection failed; retrying in %ds", interval)
+            _STOP.wait(interval)
 
 
 # ---------------------------------------------------------------------------
@@ -209,12 +280,36 @@ def main(args=None):
             recovered = q.recover_stale(conn, 0)
             if recovered:
                 log.info("recovered %d job(s) left claimed by a previous run", recovered)
+
+            # Register immediately, so the API stops saying "no watcher is running" the
+            # moment this process is up -- not one poll interval later.
+            q.heartbeat(conn, source_root=source)
+
+            # THE HEARTBEAT RUNS ON ITS OWN THREAD, not inside the work loop.
+            #
+            # A single _work_once() tick can legitimately take MINUTES: Docling, the
+            # extraction LLM and the embedder all run inside it for a big question folder.
+            # If the beat only happened between ticks it would go stale DURING that work,
+            # and the API would report the watcher dead while it was in fact busy -- a
+            # false alarm that is just as misleading as the false "all clear" this whole
+            # change exists to remove.
+            #
+            # The thread gets its OWN connection: psycopg connections are not thread-safe,
+            # and the worker holds `conn` for the length of a job.
+            heart = threading.Thread(target=_heartbeat_loop, args=(cfg, source),
+                                     name="nhpc-heartbeat", daemon=True)
+            heart.start()
+
             while not _STOP.is_set():
                 try:
                     _work_once(cfg, conn)
                 except Exception:       # noqa: BLE001 -- the loop must survive anything
                     log.exception("worker tick failed; continuing")
                 _STOP.wait(cfg.watch_poll_seconds)
+
+            # Clean shutdown: deregister so the API knows AT ONCE. A crash skips this,
+            # which is why staleness -- not this line -- is the real liveness check.
+            q.worker_stopped(conn)
     finally:
         observer.stop()
         observer.join(timeout=5)
