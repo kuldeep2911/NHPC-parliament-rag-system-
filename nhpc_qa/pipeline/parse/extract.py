@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+from nhpc_qa.pipeline.parse import dates as _dates_mod
 
 from .ir import Pair, TableOut, detect_language
 from .tables import build_table_out, clean_table
@@ -327,6 +328,39 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
     _validate_group_links(sub_questions, answer_groups, out_flags)
     _validate_display_chain(sub_questions, annexures, out_flags)
 
+    # --- REPLY DATE ---------------------------------------------------------
+    # LLM FIRST, rules as the fallback.
+    #
+    # The model already read this whole document to find the questions, answers and tables.
+    # The header date is one more field in the SAME JSON response -- no extra API call, no
+    # extra latency. And it handles what a regex cannot: erratic PDF spacing, Hindi headers,
+    # unusual phrasings, and above all telling the reply date apart from the many other
+    # dates these documents contain (MOU dates, commissioning dates, annexure tables).
+    #
+    # ⚠️ THE MODEL IS NOT TRUSTED RAW. Its answer goes through dates.validate(), the same
+    # gate the regex uses: calendar-valid, inside the plausible year window, and
+    # corroborated against the session year. A confidently-wrong date is rejected. This is
+    # the same discipline as the span extractor -- the model is trusted to FIND, never to
+    # hand us well-formed output.
+    _sy = None
+    _sess = (doc.get("session") or meta.get("session") or "") if isinstance(doc, dict) else ""
+    if _sess[:4].isdigit():
+        _sy = int(_sess[:4])
+
+    _llm_date = doc.get("_llm_reply_date") if isinstance(doc, dict) else None
+    _reply_date = _dates_mod.validate(_llm_date, session_year=_sy)
+
+    if _reply_date is None:
+        # The model returned nothing, was rejected, or is not configured at all (the parser
+        # can run without an LLM). Fall back to the anchored regex over the header, then the
+        # body. A date is never worth failing a parse over.
+        _reply_date = _dates_mod.extract_from_text(subject, text, session_year=_sy)
+        if _reply_date is not None and _llm_date:
+            out_flags.append("reply_date_llm_rejected")   # the model said something unusable
+
+    if _reply_date is None:
+        out_flags.append("reply_date_missing")            # visible, never a silent default
+
     fields = {
         # Change 4: the RETRIEVAL/embedding unit for Phase 3 is the sub-question's
         # question text. Answers/tables/annexures are DISPLAY PAYLOAD, not search
@@ -337,6 +371,12 @@ def build_document_fields(doc, layout, meta, pairs, flags, qdir=None,
         "diary_numbers": dnums,
         "starred": starred,
         "subject": subject,
+
+        # ONE column. An ISO string in parsed.json (JSON has no date type); psycopg casts
+        # it on load. NULL when no date could be established -- shown as "date unknown"
+        # and sorted last, never guessed.
+        "reply_date": _reply_date.isoformat() if _reply_date else None,
+
         "reply_format": reply_format,
         "is_nhpc_relevant": _is_nhpc_relevant(text, answer_groups),
         "sub_questions": [sq.to_dict() for sq in sub_questions],
@@ -1516,7 +1556,20 @@ _SPAN_SYSTEM = (
     "reply (e.g. '3043', 'S-77'); it is the SAME for every sub-question. Put the "
     "'(a)'/'(b)' letter in part_label, never in question_number.\n"
     "\n"
-    'Schema: {"question_number":str,"sub_questions":['
+    "ALSO REPORT: reply_date = the date on which this question was TO BE ANSWERED in "
+    "Parliament, as YYYY-MM-DD.\n"
+    "- It appears in the header, after a phrase such as 'to be answered on', 'for "
+    "answer on', 'for <date> on the subject', or the Hindi 'दिनांक' / 'तारीख'.\n"
+    "- The document is Indian: a date written 03.08.2023 is DD.MM.YYYY -> 2023-08-03. "
+    "Never read it as MM.DD.\n"
+    "- ⚠️ IGNORE every other date in the document. These replies are full of dates that "
+    "are NOT the reply date: MOU and agreement dates, commissioning dates, tariff "
+    "dates, dates inside annexure tables, the date a letter was received. Only the date "
+    "the QUESTION IS ANSWERED counts.\n"
+    "- If the header has no such date, return null. NEVER guess, and never substitute "
+    "another date you found — a wrong date is worse than none.\n"
+    "\n"
+    'Schema: {"question_number":str,"reply_date":"YYYY-MM-DD"|null,"sub_questions":['
     '{"part_label":"a","question_lines":[int,int],"answer_lines":[int,int]|null,'
     '"answer_table_ids":[str],"answer_is_table":bool,"confidence":"high|low"}]}'
 )
@@ -1580,6 +1633,12 @@ def _model_spans(doc, layout, meta, cfg, backend, table_objs, tracer=None):
                     "layout_case": layout.get("case")},
                     model_name=model_name, duration_ms=dt)
             if not errs:
+                # The reply date rides along on the SAME call that found the spans -- no
+                # extra request, no extra latency, no extra cost. It is stashed on `doc`
+                # because _pairs_from_spans returns pairs, not the raw model object, and
+                # build_document_fields is where it is finally validated and stored.
+                if isinstance(doc, dict) and obj.get("reply_date") is not None:
+                    doc["_llm_reply_date"] = obj.get("reply_date")
                 return _pairs_from_spans(
                     sqs, obj, table_objs, meta, repairs, tables_index,
                     all_tabs, ans_tabs)

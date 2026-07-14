@@ -94,6 +94,9 @@
   .meta .sep { color:#c3c1ba; }
   .pill { font-size:11.5px; font-weight:500; padding:3px 9px; border-radius:20px;
           background:#eceae5; color:#767c83; }
+  /* the reply date — the recency signal the results are ordered by */
+  .rdate { font-size:12.5px; font-weight:600; color:#33383e; }
+  .rdate.unk { font-weight:500; font-style:italic; color:var(--mut2); }
 
   /* answer_type badges — one per API value, so the badge always states what the record says */
   .badge { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:600;
@@ -415,6 +418,21 @@ function badge(t) {
   return `<span class="badge ${cls}">${esc(BADGE[t] || t || "unknown")}</span>`;
 }
 
+// The reply date — the date the question was to be answered in Parliament.
+//
+// A null date is shown as "date unknown", NOT hidden and NOT guessed. The results are
+// ordered most-recent-first, so a document with no date silently placed among the dated
+// ones would misrepresent where it belongs. Saying "unknown" is the honest option, and it
+// matches how the backend sorts it (nulls last).
+function replyDate(r) {
+  if (!r.reply_date) {
+    return '<span class="rdate unk" title="No reply date could be read from this document.">date unknown</span>';
+  }
+  const d = new Date(r.reply_date + "T00:00:00");
+  const s = d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+  return `<span class="rdate" title="Answered in Parliament on ${esc(r.reply_date)}">${esc(s)}</span>`;
+}
+
 // The API reports timings PER GRAPH NODE, with no "total" — so add them up.
 function totalMs(t) {
   return Object.values(t || {}).reduce((a, b) => a + (Number(b) || 0), 0);
@@ -505,6 +523,8 @@ function render(d) {
         <span>${esc(r.house)}</span><span class="sep">·</span>
         <span>${esc(r.session)}</span><span class="sep">·</span>
         <span>diary ${esc(r.diary_number)}</span>
+        <span class="sep">·</span>
+        ${replyDate(r)}
         ${badge(r.answer_type)}
         ${r.starred ? '<span class="pill">starred</span>' : ""}
         ${r.needs_review ? '<span class="pill" title="a parsing warning, not a correctness gate">flagged in parsing</span>' : ""}

@@ -102,6 +102,14 @@ class Phase4Config(Phase3Config):
     # --- reranker ------------------------------------------------------------
     #   nvidia_nim_api    -> NVIDIA-hosted NIM (dev). Text leaves the network.
     #   nvidia_selfhosted -> on-prem NIM (server). Nothing leaves.
+    # DISPLAY ORDER of the final top-K. Retrieval is unaffected either way -- the same
+    # documents are shown; only their order changes.
+    #   date       (default) relevance selects the top-K, then reply_date DESC orders it,
+    #              so the officer reads the most RECENT of the RELEVANT replies first.
+    #              Undated documents sort last, marked "date unknown".
+    #   relevance  pure cross-encoder order (the pre-date behaviour).
+    result_sort: str = field(default_factory=lambda: _env("RESULT_SORT", "date"))
+
     rerank_enabled: bool = field(default_factory=lambda: _env_bool("RERANK_ENABLED", True))
     rerank_backend: str = field(default_factory=lambda: _env("RERANK_BACKEND", "nvidia_nim_api"))
     rerank_model: str = field(default_factory=lambda: _env("RERANK_MODEL", DEFAULT_RERANK_MODEL))

@@ -123,6 +123,10 @@ def _diary_row(doc, rel_path):
         "session_year": session_year(doc.get("session")),
         "state": doc.get("state"),
         "subject": doc.get("subject"),
+        # The reply date, extracted by the LLM during the span-extraction call and
+        # validated (parse/dates.py). Nullable on purpose: an undated document still loads
+        # and stays fully retrievable -- the date only orders the DISPLAY.
+        "reply_date": doc.get("reply_date"),
         "starred": doc.get("starred"),
         "reply_format": doc.get("reply_format"),
         "is_nhpc_relevant": doc.get("is_nhpc_relevant"),

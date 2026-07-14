@@ -200,6 +200,7 @@ SELECT sq.sub_question_id, sq.sub_question_local, sq.doc_key, sq.part_label,
        sq.question_text, sq.question_language,
        d.question_id, d.session, d.session_year, d.house, d.subject, d.starred,
        d.is_nhpc_relevant, d.answer_file_path, d.needs_review,
+       d.reply_date,
        ag.answer_group_id, ag.answer_text, ag.answer_type, ag.answer_language,
        ag.answers_parts
 FROM sub_questions sq
@@ -271,6 +272,12 @@ def assemble(state, deps):
             "is_nhpc_relevant": row["is_nhpc_relevant"],
             "needs_review": row["needs_review"],       # developer warning, not a gate
 
+            # RECENCY. reply_date is the date the question was to be answered in
+            # Parliament -- what "the most recent reply" means to an officer. NULL is
+            # shown as "date unknown" and sorts LAST; it is never silently treated as
+            # old or as new.
+            "reply_date": row["reply_date"].isoformat() if row["reply_date"] else None,
+
             "answer_text": row["answer_text"],
             "answer_type": row["answer_type"],
             "answer_language": row["answer_language"],
@@ -305,5 +312,49 @@ def assemble(state, deps):
             },
         })
 
+    # -----------------------------------------------------------------------
+    # DISPLAY ORDER — relevance SELECTS, date ORDERS.
+    # -----------------------------------------------------------------------
+    # This runs LAST, over the already-retrieved, already-reranked top-K. It does not touch
+    # retrieval: the same K documents are shown either way, only their order changes.
+    #
+    # WHY NOT SORT THE WHOLE CANDIDATE SET BY DATE. Because "most recent" is not "most
+    # relevant". Sorting the candidate pool by date would put the newest questions on the
+    # page whether or not they have anything to do with what the officer asked -- a recent
+    # irrelevant reply outranking last year's exact precedent. So the cross-encoder decides
+    # WHICH replies are relevant, and the date decides in WHAT ORDER those relevant replies
+    # are read.
+    #
+    # relevance_rank is preserved on every result, so the UI can always show what the
+    # ranker actually thought.
+    if getattr(cfg_sort := deps["cfg"], "result_sort", "date") == "date" and results:
+        for r in results:
+            r["relevance_rank"] = r["rank"]
+
+        # NULLS LAST, always. An undated document must never float to the top of a
+        # "most recent first" list -- it is unknown, not new. Ties (same date) keep the
+        # reranker's order, which is why relevance_rank is the second key.
+        results.sort(key=lambda r: (r["reply_date"] is None,               # dated first
+                                    _neg_date(r["reply_date"]),            # newest first
+                                    r["relevance_rank"]))                  # then relevance
+        for i, r in enumerate(results, start=1):
+            r["rank"] = i
+        log.info("display order: by reply_date DESC (relevance chose the set) — %d dated, "
+                 "%d undated", sum(1 for r in results if r["reply_date"]),
+                 sum(1 for r in results if not r["reply_date"]))
+    else:
+        for r in results:
+            r["relevance_rank"] = r["rank"]
+
     _timed(state, "assemble", t0)
     return {"results": results}
+
+
+def _neg_date(iso: str | None):
+    """Sort key for DESCENDING date. ISO strings sort lexicographically, so negating means
+    inverting the string order -- easiest done by returning a tuple that reverses it."""
+    if not iso:
+        return ()                      # never reached for the sort (nulls are keyed first)
+    # '2026-04-02' -> (-2026, -4, -2): newest first, with no string trickery.
+    y, m, d = iso.split("-")
+    return (-int(y), -int(m), -int(d))

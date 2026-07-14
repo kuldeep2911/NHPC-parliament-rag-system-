@@ -124,6 +124,16 @@ def cmd_purge(args):
     return purge_main(args)
 
 
+def cmd_backfill_dates(args):
+    from nhpc_qa.pipeline.index.backfill_dates import main as bf
+    argv = []
+    if args.llm:     argv.append("--llm")
+    if args.dry_run: argv.append("--dry-run")
+    if args.force:   argv.append("--force")
+    if args.limit:   argv += ["--limit", str(args.limit)]
+    return bf(argv)
+
+
 def cmd_create_admin(args):
     from nhpc_qa.api.security.bootstrap import create_admin
     return create_admin(email=args.email)
@@ -205,6 +215,18 @@ def build_parser():
     p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     p.add_argument("--dry-run", action="store_true", help="show what would be purged")
     p.set_defaults(func=cmd_purge)
+
+    # backfill-dates — rule-based over EXISTING data. No Docling, no re-parse; the LLM
+    # only on the leftovers, and only if asked.
+    p = sub.add_parser(
+        "backfill-dates",
+        help="extract reply dates for existing documents (no re-parse; --llm for misses)")
+    p.add_argument("--llm", action="store_true",
+                   help="use the LLM on rule-based misses (costs API calls)")
+    p.add_argument("--dry-run", action="store_true", help="report only; write nothing")
+    p.add_argument("--force", action="store_true", help="redo already-dated documents")
+    p.add_argument("--limit", type=int, default=0)
+    p.set_defaults(func=cmd_backfill_dates)
 
     # create-admin — one-time first-run bootstrap. Prints a generated password ONCE.
     p = sub.add_parser(
