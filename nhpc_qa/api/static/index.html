@@ -253,6 +253,38 @@
   .pager { display:flex; align-items:center; justify-content:center; gap:14px;
            margin-top:12px; }
 
+  /* ── draft assist ──────────────────────────────────────────────────────── */
+  .draftbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+              padding:0 2px 16px; }
+  .draftbar .dim { flex:1; min-width:220px; font-size:12.5px; }
+  .draftpanel { background:#fff; border:1px solid var(--line); border-radius:12px;
+                padding:22px 24px; margin-bottom:20px; }
+  /* The DRAFT notice is red and at the top for a reason: this text will be copied into a
+     reply to Parliament. It must never look like an approved answer. */
+  .draftnotice { background:#fdf0ef; border:1px solid #f0cfcb; color:#9a3b32;
+                 border-radius:8px; padding:10px 13px; font-size:12.5px; line-height:1.5;
+                 margin-bottom:14px; }
+  .patnote { font-size:12.5px; color:#565c63; background:#f4f6f8; border-radius:7px;
+             padding:9px 12px; margin-bottom:16px; line-height:1.5; }
+  .dh { font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+        color:var(--navy); margin:18px 0 8px; }
+  .dh.gap { color:#9a3b32; }
+  .dpart { margin-bottom:14px; }
+  .dtext { font-size:14.5px; color:var(--ink2); line-height:1.6; white-space:pre-wrap; }
+  .cites { display:inline-flex; flex-wrap:wrap; gap:5px; margin-top:5px; }
+  .cite { font-size:10.5px; font-family:ui-monospace, SFMono-Regular, monospace;
+          background:#eef2f7; color:var(--navy); border:1px solid #cdd6e0;
+          border-radius:4px; padding:1px 6px; }
+  .uncited { display:inline-block; margin-top:5px; font-size:11px; font-weight:600;
+             color:#9a3b32; background:#fdf0ef; border:1px solid #f0cfcb;
+             border-radius:4px; padding:1px 7px; }
+  .dkp { margin:0; padding-left:20px; }
+  .dkp li { font-size:13.5px; color:var(--ink2); line-height:1.6; margin-bottom:7px; }
+  .dgaps { margin:0; padding-left:20px; }
+  .dgaps li { font-size:13.5px; color:#7d3b34; line-height:1.6; margin-bottom:5px; }
+  .dactions { display:flex; align-items:center; gap:12px; margin-top:20px;
+              padding-top:16px; border-top:1px solid var(--line); }
+
   @media (max-width:720px) {
     header, .searchbar { padding-left:18px; padding-right:18px; }
     main { padding:20px 18px 60px; }
@@ -488,13 +520,25 @@ function render(d) {
     // "undefined ms" on every search.
     + ` · ${totalMs(g.timings_ms)} ms`
     + `</div>`
-    + `<div class="disclaimer">Scores below are heuristics for triage, not a guarantee of correctness.</div>`;
+    + `<div class="disclaimer">Scores below are heuristics for triage, not a guarantee of correctness.</div>`
+    + (d.results.length
+       ? `<div class="draftbar">
+            <button class="btn" id="draftGo">✎ Generate draft reply</button>
+            <span class="dim">Builds a cited draft from these past replies. You review it —
+              it is never an approved answer.</span>
+          </div><div id="draftbox"></div>`
+       : "");
 
   if (!d.results.length) {
     $("#out").innerHTML = `<div class="empty"><div class="big">🔍</div>`
       + `<div class="t">No matching past questions.</div></div>`;
     return;
   }
+
+  // The draft is a SEPARATE call, made only when the officer asks. /query never waits for
+  // an LLM — most searches are "has this been asked before?", and drafting every one of
+  // them would burn a model call on a draft nobody reads.
+  setTimeout(() => { const b = $("#draftGo"); if (b) b.onclick = () => generateDraft(); }, 0);
 
   $("#out").innerHTML = '<div class="cards">' + d.results.map(r => {
     // File controls are BUTTONS, not <a href> links.
@@ -626,6 +670,117 @@ function drawPast() {
 
 function openPast()  { drawPast(); $("#pastPanel").hidden = false; $("#recent").setAttribute("aria-expanded", "true"); }
 function closePast() { $("#pastPanel").hidden = true;  $("#recent").setAttribute("aria-expanded", "false"); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DRAFT ASSIST
+// ═══════════════════════════════════════════════════════════════════════════
+// Called ONLY when the officer clicks. The draft is built server-side from the run_id, so
+// the browser never gets to choose what the model is grounded in — it re-reads the exact
+// results the officer was shown.
+async function generateDraft() {
+  const btn = $("#draftGo"), box = $("#draftbox");
+  if (!RUN_ID || !btn || !box) return;
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = "drafting…";
+  box.innerHTML = `<div class="draftpanel"><div class="mnote">Reading the past replies and
+    drafting… this takes a few seconds.</div></div>`;
+  try {
+    const r = await api("/draft", { method: "POST", headers: headers(),
+                                    body: JSON.stringify({ run_id: RUN_ID }) });
+    const d = await r.json();
+    if (!d.draft) {
+      // FAILS SOFT. The results are still on screen; only the optional draft is missing.
+      box.innerHTML = `<div class="draftpanel"><div class="gerr">Draft unavailable —
+        ${esc(d.reason || "the drafting model did not respond")}. Your results are unaffected.</div></div>`;
+      return;
+    }
+    renderDraft(d.draft);
+  } catch (e) {
+    box.innerHTML = `<div class="draftpanel"><div class="gerr">Draft unavailable —
+      ${esc(e.message)}. Your results are unaffected.</div></div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
+const PATTERN_NOTE = {
+  deferred_to_ministry: "NHPC has historically DEFERRED this subject to the Ministry — the draft mirrors that rather than inventing an NHPC position.",
+  not_applicable: "This subject has historically NOT PERTAINED to NHPC — the draft says so rather than manufacturing content.",
+  nil: "NHPC has historically returned NIL information on this subject.",
+  substantive: "NHPC has historically answered this substantively — the draft is built from those answers.",
+  mixed: "The past replies are mixed; the draft follows the pattern of the most relevant ones.",
+};
+
+function renderDraft(D) {
+  const cite = cs => (cs && cs.length)
+    ? `<span class="cites">${cs.map(c => `<span class="cite">${esc(c)}</span>`).join("")}</span>`
+    // An uncited point is never quietly shown as if it were sourced.
+    : `<span class="uncited">⚠ uncited — no past reply supports this</span>`;
+
+  $("#draftbox").innerHTML = `
+    <div class="draftpanel">
+      <div class="draftnotice">⚠ DRAFT — FOR OFFICER REVIEW.
+        Generated from NHPC's past replies only. Verify every figure against the cited
+        sources. <b>This is not an approved reply.</b></div>
+
+      <div class="patnote"><b>${esc(D.pattern)}</b> — ${esc(PATTERN_NOTE[D.pattern] || "")}</div>
+
+      <h4 class="dh">Draft answer</h4>
+      ${(D.parts || []).map(p => `
+        <div class="dpart">
+          <div class="dtext">${p.label ? `<b>${esc(p.label)}</b> ` : ""}${esc(p.text)}</div>
+          ${cite(p.cites)}
+        </div>`).join("")}
+
+      ${(D.key_points || []).length ? `
+        <h4 class="dh">Key points the reply should cover</h4>
+        <ul class="dkp">${D.key_points.map(k => `
+          <li>${esc(k.point)} ${cite(k.cites)}</li>`).join("")}</ul>` : ""}
+
+      ${(D.gaps || []).length ? `
+        <h4 class="dh gap">Gaps — officer input needed</h4>
+        <div class="dim" style="margin-bottom:6px;">The past replies do not cover these.
+          Nothing has been invented for them.</div>
+        <ul class="dgaps">${D.gaps.map(g => `
+          <li>${g.part ? `<b>${esc(g.part)}</b> — ` : ""}${esc(g.reason)}</li>`).join("")}</ul>` : ""}
+
+      <h4 class="dh">Sources</h4>
+      <table class="utab"><thead><tr><th>Citation</th><th>Answered</th><th>Type</th></tr></thead>
+        <tbody>${(D.sources || []).map(s => `<tr>
+          <td>${esc(s.citation)}</td>
+          <td class="dim">${esc(s.reply_date || "—")}</td>
+          <td>${badge(s.answer_type)}</td></tr>`).join("")}</tbody></table>
+
+      ${D.citations_dropped ? `<div class="gerr" style="margin-top:12px;">
+        ${D.citations_dropped} invented citation(s) were removed from this draft.</div>` : ""}
+
+      <div class="dactions">
+        <button class="btn" id="dlDocx">⤓ Download as Word (.docx)</button>
+        <span class="dim">model ${esc(D.model || "")} · ${D.ms} ms</span>
+      </div>
+    </div>`;
+
+  $("#dlDocx").onclick = async () => {
+    const b = $("#dlDocx"); const t = b.textContent;
+    b.disabled = true; b.textContent = "preparing…";
+    try {
+      // fetch() with the session cookie, then hand the bytes to the browser as a blob —
+      // exactly as the /file buttons do. A plain link cannot carry the session.
+      const r = await fetch("/draft/docx", { method: "POST", headers: headers(),
+                                             body: JSON.stringify({ run_id: RUN_ID }) });
+      if (!r.ok) { alert("Could not build the document."); return; }
+      const blob = await r.blob();
+      const cd = r.headers.get("content-disposition") || "";
+      const m = /filename="([^"]+)"/.exec(cd);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = m ? m[1] : "NHPC-draft.docx";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } finally { b.disabled = false; b.textContent = t; }
+  };
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // AUTH
