@@ -59,10 +59,52 @@ class Phase4Config(Phase3Config):
     dense_top_n:   int = field(default_factory=lambda: _env_int("RETRIEVE_DENSE_TOP_N", 30))
     keyword_top_n: int = field(default_factory=lambda: _env_int("RETRIEVE_KEYWORD_TOP_N", 30))
     entity_top_n:  int = field(default_factory=lambda: _env_int("RETRIEVE_ENTITY_TOP_N", 30))
-    # How many results the officer actually sees, after reranking. Kept small on purpose:
-    # an officer scans these by eye, and the cross-encoder's precision falls off quickly
-    # past the top few. Raise RETRIEVE_FINAL_TOP_K if you want a longer list.
-    final_top_k:   int = field(default_factory=lambda: _env_int("RETRIEVE_FINAL_TOP_K", 5))
+    # How many candidates the reranker scores. This is the POOL the sigmoid filter and the
+    # LLM verify pass draw from -- it is NOT a display cap. It must be generous, because the
+    # output is now uncapped: a question genuinely asked 12 times must have all 12 reach the
+    # reranker, or "no cap" is a lie (the cap just moved upstream). Calibration pools were
+    # 19-27; 80 leaves ample headroom for a frequent topic.
+    # RERANK_CANDIDATE_POOL is the name that describes what it now is; RETRIEVE_FINAL_TOP_K
+    # is the old name and still works, so existing .env files do not break.
+    final_top_k:   int = field(default_factory=lambda:
+        _env_int("RERANK_CANDIDATE_POOL", _env_int("RETRIEVE_FINAL_TOP_K", 80)))
+
+    # ─── SIGMOID RELEVANCE FILTER ────────────────────────────────────────────
+    # The reranker emits a RAW LOGIT (unbounded, NOT a probability). sigmoid(logit) rescales
+    # it to 0-1 for interpretability: sigmoid(0)=0.5, big positive -> ~1, big negative -> ~0.
+    #
+    # ⚠️ THIS IS A MONOTONIC RESCALING, NOT A CALIBRATED PROBABILITY. ⚠️ 0.9 does NOT mean
+    # "correct 90% of the time". And it does NOT separate matches from noise on its own --
+    # calibration (scratchpad/calibrate2.py) proved the two populations overlap completely:
+    # the lowest genuine match scored sigmoid 0.003, while boilerplate noise ("details
+    # thereof") scored 0.9999. No sigmoid value splits them.
+    #
+    # So the threshold is deliberately LOW and its job is RECALL, not precision: a cheap
+    # pre-filter that bounds how many candidates reach the LLM verify pass, which is what
+    # actually judges similarity. 0.05 keeps every genuine match we could retrieve except
+    # one rare-topic outlier at 0.003 (a threshold low enough to keep THAT admits nearly all
+    # noise), and the LLM removes the boilerplate the filter lets through.
+    #
+    # MODEL-SPECIFIC. Calibrated for llama-nemotron-rerank-1b-v2. A different reranker emits
+    # logits on a different scale -- re-run the calibration before trusting this value.
+    similarity_threshold: float = field(
+        default_factory=lambda: _env_float("SIMILARITY_THRESHOLD", 0.6))
+
+    # A bound on pathological cases, NOT a relevance cap. The relevance decision is the
+    # sigmoid filter + the LLM; this only stops a degenerate query returning hundreds.
+    safety_max_results: int = field(
+        default_factory=lambda: _env_int("SAFETY_MAX_RESULTS", 50))
+
+    # ─── LLM SIMILARITY VERIFICATION ─────────────────────────────────────────
+    # The precision stage. ONE batched call judges every sigmoid-passing candidate for
+    # genuine similarity to the query, and non-matches are dropped. It puts an LLM call in
+    # the LIVE query path -- accepted deliberately for precision -- so it is ONE batched
+    # call, timed separately in the trace, and RESILIENT: if it fails, the sigmoid set is
+    # returned unverified with a "verification_unavailable" flag rather than an error.
+    llm_verify_enabled: bool = field(
+        default_factory=lambda: _env_bool("LLM_VERIFY_ENABLED", True))
+    llm_verify_max_tokens: int = field(
+        default_factory=lambda: _env_int("LLM_VERIFY_MAX_TOKENS", 1500))
 
     # --- RRF fusion ----------------------------------------------------------
     # score(d) = sum over retrievers r of  weight_r / (rrf_k + rank_r(d))

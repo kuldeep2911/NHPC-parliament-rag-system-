@@ -106,6 +106,13 @@ async def lifespan(_app: FastAPI):
 
     log.info("phase4 api ready | rerank=%s generation=%s | %d entities",
              cfg.rerank_enabled, cfg.generation_enabled, len(graph_deps["entity_vocab"]))
+    # State the reranker AND the threshold together. The sigmoid threshold is calibrated for
+    # a SPECIFIC reranker; if someone swaps the model without re-calibrating, this line is
+    # where the mismatch is visible.
+    log.info("result filter | reranker=%s | sigmoid_threshold=%.3f | llm_verify=%s | "
+             "candidate_pool=%d safety_max=%d",
+             cfg.rerank_model, cfg.similarity_threshold, cfg.llm_verify_enabled,
+             cfg.final_top_k, cfg.safety_max_results)
 
     yield
 
@@ -200,13 +207,20 @@ def query(payload: dict = Body(...), who=Depends(identity)):
                     doc_keys=[r["doc_key"] for r in results])
 
     stats = out.get("fuse_stats") or {}
+    vmeta = out.get("verify_meta") or {}
     return {
         "run_id": run_id,
         "query": q,
         # PROCESSING ONLY -- language never filtered the candidate set
         "language": out.get("language"),
         "entities": out.get("entities") or [],
+        # VARIABLE LENGTH now: 0..safety_max. The fixed 5 is gone; result_count is the
+        # honest actual count, and the UI must render it (and a 0-state) rather than imply 5.
+        "result_count": len(results),
         "results": results,
+        # True when the LLM verify pass could not run -- the results are the sigmoid set,
+        # UNVERIFIED. The UI surfaces this; it is not an error.
+        "verification_unavailable": bool(out.get("verification_unavailable")),
         "draft": out.get("draft"),           # None unless generation is enabled
         "diagnostics": {
             "_note": "confidence signals are HEURISTICS for triage, not correctness",
@@ -215,6 +229,14 @@ def query(payload: dict = Body(...), who=Depends(identity)):
             "retrievers_eligible": stats.get("eligible"),
             "retrievers_fired": stats.get("fired"),
             "n_candidates": stats.get("n_candidates"),
+            # the new filter chain, for triage from the trace
+            "similarity_threshold": cfg.similarity_threshold,
+            "sigmoid_dropped": out.get("sigmoid_dropped"),
+            "verify_enabled": vmeta.get("enabled"),
+            "verify_checked": vmeta.get("checked"),
+            "verify_kept": vmeta.get("kept"),
+            "verify_ms": vmeta.get("ms"),
+            "verify_unavailable_reason": vmeta.get("reason"),
             "widened": bool(out.get("widened")),
             "widen_reason": out.get("widen_reason"),
             "rerank_failed": bool(out.get("rerank_failed")),

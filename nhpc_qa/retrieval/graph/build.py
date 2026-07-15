@@ -85,6 +85,9 @@ def build_graph(deps):
     g.add_node("retrieve", traced("retrieve", lambda s: nodes.hybrid_retrieve(s, deps)))
     g.add_node("fuse", traced("fuse", lambda s: nodes.fuse_results(s, deps)))
     g.add_node("rerank", traced("rerank", lambda s: nodes.rerank(s, deps)))
+    # NODE 4b — sigmoid filter + LLM similarity verification. Trims the fixed pool to a
+    # variable-length set of genuine matches; the LLM stage is resilient (see nodes.verify).
+    g.add_node("verify", traced("verify", lambda s: nodes.verify(s, deps)))
     g.add_node("assemble", traced("assemble", lambda s: nodes.assemble(s, deps)))
 
     # The widen node ONLY flips the flag; hybrid_retrieve reads it and broadens
@@ -122,7 +125,8 @@ def build_graph(deps):
 
     g.add_conditional_edges("fuse", after_fuse, {"widen": "widen", "rerank": "rerank"})
     g.add_edge("widen", "retrieve")        # re-retrieve, now broadened; fuse again
-    g.add_edge("rerank", "assemble")
+    g.add_edge("rerank", "verify")         # sigmoid filter + LLM verify BEFORE assemble
+    g.add_edge("verify", "assemble")
 
     # NODE 6 — generation is OPTIONAL and OFF by default. When off it is not even wired
     # in, so it cannot affect the live path.

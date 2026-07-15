@@ -97,6 +97,15 @@
   /* the reply date — the recency signal the results are ordered by */
   .rdate { font-size:12.5px; font-weight:600; color:#33383e; }
   .rdate.unk { font-weight:500; font-style:italic; color:var(--mut2); }
+  /* sigmoid relevance — a readable heuristic, colour-banded by strength */
+  .relv { font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; }
+  .relv.hi  { background:#e7f1ea; color:#2f6b45; }
+  .relv.mid { background:#fbf3e3; color:#8a6a1f; }
+  .relv.lo  { background:#f2efec; color:#7d7469; }
+  /* verification-unavailable banner — the LLM check did not run */
+  .warnbanner { background:#fbf3e3; border:1px solid #e6d4a8; color:#7a5c17;
+                border-radius:8px; padding:9px 13px; font-size:12.5px; line-height:1.5;
+                margin:4px 2px 12px; }
 
   /* answer_type badges — one per API value, so the badge always states what the record says */
   .badge { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:600;
@@ -456,6 +465,18 @@ function badge(t) {
 // ordered most-recent-first, so a document with no date silently placed among the dated
 // ones would misrepresent where it belongs. Saying "unknown" is the honest option, and it
 // matches how the backend sorts it (nulls last).
+// The sigmoid relevance as a readable percentage. A 0-1 figure is far more meaningful to
+// an officer than a raw logit -- but it is LABELLED a heuristic, because it is a monotonic
+// rescaling of the reranker logit, NOT a calibrated probability (90% does not mean "right
+// 90% of the time"). The raw logit stays in the .sig line for developer triage.
+function relevanceChip(r) {
+  const v = r.relevance;
+  if (v == null) return "";
+  const pct = (v * 100).toFixed(0);
+  const cls = v >= 0.8 ? "hi" : (v >= 0.4 ? "mid" : "lo");
+  return `<span class="relv ${cls}" title="reranker relevance (a heuristic, not a probability)">${pct}% relevant</span>`;
+}
+
 function replyDate(r) {
   if (!r.reply_date) {
     return '<span class="rdate unk" title="No reply date could be read from this document.">date unknown</span>';
@@ -503,25 +524,29 @@ async function search(text) {
 
 function render(d) {
   const g = d.diagnostics;
+  const n = d.results.length;                 // VARIABLE now — 0..N, never a fixed 5
   $("#diag").hidden = false;
   $("#diag").innerHTML =
     `<div class="diag">`
-    + `<span class="n">${d.results.length} results</span>`
+    + `<span class="n">${n} ${n === 1 ? "match" : "matches"}</span>`
     + ` · language <b>${esc(d.language)}</b> (detected for processing — it never filters the search)`
     + ` · entities ${d.entities.length ? "<b>" + esc(d.entities.join(", ")) + "</b>" : "none"}`
     + ` · retrievers fired <b>${esc((g.retrievers_fired || []).join("+")) || "—"}</b>`
     + ` of ${(g.retrievers_eligible || []).length} eligible`
+    + (g.verify_enabled && !d.verification_unavailable
+       ? ` · verified <b>${g.verify_kept}</b> of ${g.verify_checked} candidates (${g.verify_ms} ms)` : "")
     + (g.widened ? ` · <b>widened</b> (${esc(g.widen_reason)})` : "")
-    // Kept deliberately: if the reranker died, the officer must know the order is fusion-
-    // only. Hiding it would make these results look more trustworthy than they are.
     + (g.rerank_failed ? ` · <span class="bad">reranker unavailable — showing fusion order</span>` : "")
-    // diagnostics.timings_ms is PER NODE (query_process, retrieve, fuse, rerank, assemble)
-    // -- there is no "total" key, so sum them here. The old UI read .total and rendered
-    // "undefined ms" on every search.
     + ` · ${totalMs(g.timings_ms)} ms`
     + `</div>`
+    // The LLM verify pass could not run -> the shown results are the sigmoid set,
+    // UNVERIFIED. Say so plainly; hiding it would overstate their precision.
+    + (d.verification_unavailable
+       ? `<div class="warnbanner">⚠ Similarity verification was unavailable — these results
+            are ranked by relevance only and have <b>not</b> been checked for genuine match.
+            Treat with extra care.</div>` : "")
     + `<div class="disclaimer">Scores below are heuristics for triage, not a guarantee of correctness.</div>`
-    + (d.results.length
+    + (n
        ? `<div class="draftbar">
             <button class="btn" id="draftGo">✎ Generate draft reply</button>
             <span class="dim">Builds a cited draft from these past replies. You review it —
@@ -529,9 +554,15 @@ function render(d) {
           </div><div id="draftbox"></div>`
        : "");
 
-  if (!d.results.length) {
+  if (!n) {
+    // HONEST EMPTY STATE — a real answer, not an error and not a blank list. For a
+    // contradiction-checker, "this has not been asked before" is useful information.
     $("#out").innerHTML = `<div class="empty"><div class="big">🔍</div>`
-      + `<div class="t">No matching past questions.</div></div>`;
+      + `<div class="t">No similar past questions found.</div>`
+      + `<div class="d">Nothing on record is a genuine match for this question`
+      + (g.verify_enabled && !d.verification_unavailable
+         ? ` — retrieval surfaced candidates, but none passed similarity verification.` : `.`)
+      + `</div></div>`;
     return;
   }
 
@@ -570,13 +601,15 @@ function render(d) {
         <span class="sep">·</span>
         ${replyDate(r)}
         ${badge(r.answer_type)}
+        ${relevanceChip(r)}
         ${r.starred ? '<span class="pill">starred</span>' : ""}
         ${r.needs_review ? '<span class="pill" title="a parsing warning, not a correctness gate">flagged in parsing</span>' : ""}
       </div>
       <div class="q">(${esc(r.part_label)}) ${esc(r.question_text)}</div>
       <div class="a">${esc(r.answer_text || "(no answer text)")}</div>
       <div class="files">${files}</div>
-      <div class="sig">rrf ${s.rrf_score} · rerank ${s.rerank_logit ?? "—"} (moved ${moved}) ·
+      <div class="sig">relevance ${s.relevance != null ? (s.relevance * 100).toFixed(1) + "%" : "—"} ·
+        rrf ${s.rrf_score} · rerank ${s.rerank_logit ?? "—"} (moved ${moved}) ·
         found by ${esc(s.retrievers.join("+"))} · agreement ${s.agreement}</div>
       <div class="fb">
         <button class="up" onclick="vote(this,'up')" aria-label="helpful">👍</button>

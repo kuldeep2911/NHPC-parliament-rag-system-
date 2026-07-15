@@ -193,6 +193,64 @@ def rerank(state, deps):
 
 
 # ---------------------------------------------------------------------------
+# NODE 4b — VERIFY  (sigmoid filter, then batched LLM similarity check)
+# ---------------------------------------------------------------------------
+def verify(state, deps):
+    """
+    Trim the reranked set to genuine matches: a cheap sigmoid recall-filter, then an LLM
+    precision pass. Output is VARIABLE length (0..safety_max) -- the fixed-5 cap is gone.
+
+    Calibration proved the sigmoid cannot separate matches from noise on its own (a real
+    match scored 0.003; boilerplate scored 0.9999), so the threshold is deliberately low
+    and the LLM does the discriminating. See nhpc_qa/retrieval/verify.py.
+
+    RESILIENT: if the LLM verify pass fails, the sigmoid set is returned UNVERIFIED with
+    verification_unavailable=True. The officer never loses results to an LLM outage.
+    """
+    from nhpc_qa.retrieval import verify as V
+
+    t0 = time.time()
+    cfg = deps["cfg"]
+    reranked = state.get("reranked") or []
+
+    kept, sig_dropped = V.sigmoid_filter(reranked, cfg.similarity_threshold,
+                                         cfg.safety_max_results)
+    log.info("sigmoid_filter: %d candidates, %d passed >= %.3f, %d dropped",
+             len(reranked), len(kept), cfg.similarity_threshold, sig_dropped)
+
+    verify_meta = {"enabled": bool(cfg.llm_verify_enabled), "unavailable": False,
+                   "ms": 0, "checked": 0, "kept": len(kept)}
+
+    if cfg.llm_verify_enabled and kept:
+        llm = deps.get("llm")
+        if llm is None:
+            from nhpc_qa.core.providers import get_llm
+            try:
+                llm = get_llm(cfg)
+                deps["llm"] = llm
+            except Exception as e:      # noqa: BLE001 -- resilient: no LLM -> unverified
+                log.warning("verify: no LLM (%s) — returning sigmoid set unverified",
+                            type(e).__name__)
+                llm = None
+        if llm is not None:
+            kept, meta = V.llm_verify(cfg, llm, state["query"], kept)
+            verify_meta.update(meta)
+        else:
+            verify_meta.update({"unavailable": True, "reason": "no LLM configured"})
+            for c in kept:
+                c["verify_verdict"] = "unverified"
+    else:
+        for c in kept:
+            c["verify_verdict"] = "disabled" if not cfg.llm_verify_enabled else "similar"
+
+    _timed(state, "verify", t0)
+    return {"reranked": kept,
+            "sigmoid_dropped": sig_dropped,
+            "verify_meta": verify_meta,
+            "verification_unavailable": verify_meta["unavailable"]}
+
+
+# ---------------------------------------------------------------------------
 # NODE 5 — ASSEMBLE  (display payload; nothing is generated here)
 # ---------------------------------------------------------------------------
 _ASSEMBLE_SQL = """
@@ -298,9 +356,18 @@ def assemble(state, deps):
                 "match_confidence": a["match_confidence"],
             } for a in annexes],
 
+            # RELEVANCE — sigmoid(logit), a readable 0-1 the officer can actually use.
+            # Labelled a heuristic, not a probability (see verify.py). None when the
+            # reranker degraded to RRF order and there is no logit to transform.
+            "relevance": p.get("relevance"),
+            # what the LLM verify pass decided: similar | unverified | disabled
+            "verify_verdict": p.get("verify_verdict"),
+            "verify_reason": p.get("verify_reason"),
+
             # CONFIDENCE SIGNALS — HEURISTICS, NOT CORRECTNESS GUARANTEES
             "signals": {
                 "_note": "heuristics for triage, not a correctness guarantee",
+                "relevance": p.get("relevance"),        # sigmoid(logit), 0-1
                 "rrf_score": round(p.get("rrf_score", 0.0), 6),
                 "rerank_logit": p.get("rerank_logit"),
                 "rerank_movement": p.get("rerank_movement"),

@@ -35,6 +35,14 @@ class QueryState(TypedDict, total=False):
     reranked: list               # top-K after the cross-encoder
     rerank_failed: bool          # optional layer: a failure degrades, never breaks
 
+    # --- node 4b: verify (sigmoid filter + LLM similarity) -------------------
+    # These MUST be declared here: LangGraph merges only keys present in this TypedDict,
+    # so a returned key that is not listed is silently dropped -- which is exactly how
+    # verify_meta went missing from the API response.
+    sigmoid_dropped: int         # candidates cut by the sigmoid recall-filter
+    verify_meta: dict            # {enabled, unavailable, checked, kept, ms, reason}
+    verification_unavailable: bool  # the LLM verify pass could not run -> results unverified
+
     # --- node 5: assemble ----------------------------------------------------
     results: list                # the display payload the officer sees
 
