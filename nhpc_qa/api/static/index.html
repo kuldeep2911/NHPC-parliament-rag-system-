@@ -322,6 +322,13 @@
   .tag-cur  { background:#fbf3e3; color:#8a6a1f; }
   .linklike { background:none; border:0; color:var(--navy); font-size:12px; cursor:pointer;
               text-decoration:underline; padding:0 0 0 6px; }
+
+  /* Upload modal tabs: Session Q&A data | Reference documents */
+  .uptabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:16px; }
+  .uptab { background:none; border:0; border-bottom:2px solid transparent; padding:8px 14px;
+           font:600 13px 'Inter', system-ui, sans-serif; color:var(--mut); cursor:pointer; }
+  .uptab:hover { color:var(--ink2); }
+  .uptab.on { color:var(--navy); border-bottom-color:var(--navy); }
   .dkp { margin:0; padding-left:20px; }
   .dkp li { font-size:13.5px; color:var(--ink2); line-height:1.6; margin-bottom:7px; }
   .dgaps { margin:0; padding-left:20px; }
@@ -392,7 +399,6 @@
       <!-- Rendered only for admins AND enforced on the server: an officer who forges this
            button still gets 403 from /admin/*. -->
       <button class="btn ghost small" id="uploadBtn" hidden>Upload</button>
-      <button class="btn ghost small" id="docsBtn" hidden>Documents</button>
       <button class="btn ghost small" id="adminBtn" hidden>Users</button>
       <button class="btn ghost small" id="pwBtn">Change password</button>
       <button class="btn ghost small" id="outBtn">Sign out</button>
@@ -993,7 +999,6 @@ function showApp() {
   // Drawn for admins only — but the SERVER is what enforces it (see /admin/* -> 403).
   $("#adminBtn").hidden = ME.role !== "admin";
   $("#uploadBtn").hidden = ME.role !== "admin";
-  $("#docsBtn").hidden = ME.role !== "admin";
   $("#q").focus();
 }
 
@@ -1126,34 +1131,7 @@ let PICKED = [];      // [{file, path}]
 let DEST = "";
 let UP_PAGE = 1;
 
-// ── ADMIN: supporting reference documents ──────────────────────────────────
-$("#docsBtn").onclick = () => {
-  openModal("Reference documents", `
-    <div class="uphead">
-      Reference files (financial reports, project progress, CSR) that officers pull into a
-      draft. <b>Not part of the Q&amp;A search</b> — they are draft-time context only, and
-      never affect search results.
-    </div>
-    <form id="sd_form" class="mform inline">
-      <select class="gin" id="sd_cat" required><option value="">category…</option></select>
-      <input class="gin" id="sd_name" type="text" placeholder="display name (optional)">
-      <input class="gin" id="sd_period" type="text" placeholder="as-of / period (blank = auto)">
-      <label class="btn ghost">Choose file…<input type="file" id="sd_file" hidden
-        accept=".pdf,.doc,.docx,.xls,.xlsx,.txt"></label>
-      <button class="btn" type="submit" id="sd_go" disabled>Upload</button>
-    </form>
-    <div id="sd_msg" hidden></div>
-    <div id="sd_list"><div class="mnote">Loading…</div></div>`);
-  SD_FILE = null;
-  loadDocCategories();
-  loadDocList();
-  $("#sd_file").onchange = e => {
-    SD_FILE = e.target.files[0] || null;
-    $("#sd_go").disabled = !SD_FILE;
-    if (SD_FILE && !$("#sd_name").value) $("#sd_name").value = SD_FILE.name.replace(/\.[^.]+$/, "");
-  };
-  $("#sd_form").onsubmit = submitDoc;
-};
+// ── supporting reference documents (rendered inside the Upload modal) ──────
 let SD_FILE = null;
 
 async function loadDocCategories() {
@@ -1169,6 +1147,7 @@ async function loadDocCategories() {
 
 async function loadDocList() {
   const el = $("#sd_list");
+  if (!el) return;
   try {
     const d = await (await api("/supporting")).json();
     const docs = d.documents || [];
@@ -1180,15 +1159,16 @@ async function loadDocList() {
         <td class="dim">${esc(u.category_label)}</td>
         <td class="dim">${esc(u.period_label || (u.as_of_date ? "as on " + u.as_of_date : "—"))}</td>
         <td class="dim">${u.page_count ?? "—"}</td>
-        <td class="acts"><button class="btn ghost small danger" data-off="${u.id}" data-nm="${esc(u.display_name)}">Remove</button></td>
+        <td class="acts"><button class="btn ghost small danger" data-off="${u.id}" data-nm="${esc(u.display_name)}">Delete</button></td>
       </tr>`).join("")}</tbody></table>`;
     el.querySelectorAll("button[data-off]").forEach(b => b.onclick = async () => {
-      if (!confirm(`Remove "${b.dataset.nm}" from the reference-document list?\n\nOfficers will no longer see it. The file and its data are retained.`)) return;
+      // HARD delete: removes the file from disk AND the row + parsed data. No undo.
+      if (!confirm(`Delete "${b.dataset.nm}"?\n\nThe file AND its parsed data are removed permanently. Officers will no longer see it. This cannot be undone.`)) return;
       try {
-        await api(`/admin/supporting/${b.dataset.off}/deactivate`, { method: "POST", headers: headers(), body: "{}" });
+        await api(`/admin/supporting/${b.dataset.off}`, { method: "DELETE", headers: headers() });
         SUPPORTING_CACHE = null;      // force the draft dropdown to refresh
         loadDocList();
-      } catch (e) { alert("Could not remove: " + e.message); }
+      } catch (e) { alert("Could not delete: " + e.message); }
     });
   } catch (e) { el.innerHTML = `<div class="gerr">${esc(e.message)}</div>`; }
 }
@@ -1204,7 +1184,6 @@ async function submitDoc(e) {
   fd.append("display_name", $("#sd_name").value);
   fd.append("period_label", $("#sd_period").value);
   try {
-    // multipart: no JSON Content-Type header, cookie carried automatically.
     const r = await fetch("/admin/supporting/upload", { method: "POST", body: fd });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { msg.className = "gerr"; msg.innerHTML = esc(d.detail?.message || d.detail || "Upload failed."); msg.hidden = false; return; }
@@ -1215,45 +1194,71 @@ async function submitDoc(e) {
       d.needs_review ? " <span class='pill'>flagged for review</span>" : ""}`;
     msg.hidden = false;
     $("#sd_form").reset(); SD_FILE = null; $("#sd_go").disabled = true;
-    SUPPORTING_CACHE = null;         // refresh the draft dropdown next time it opens
+    SUPPORTING_CACHE = null;
     loadDocList();
   } catch (err) { msg.className = "gerr"; msg.textContent = String(err); msg.hidden = false; }
   finally { go.disabled = false; go.textContent = "Upload"; }
 }
 
 $("#uploadBtn").onclick = () => {
-  openModal("Source data", `
-    <div class="uphead">
-      Uploaded files are written into the source data directory; the <b>existing</b>
-      incremental pipeline then picks them up on its own — organise → parse → embed →
-      index. Deleting removes the files <b>and</b> the indexed documents, so they stop
-      appearing in search immediately.
+  openModal("Upload", `
+    <div class="uptabs">
+      <button class="uptab on" data-tab="session">Session Q&amp;A data</button>
+      <button class="uptab" data-tab="supporting">Reference documents</button>
     </div>
 
-    <div id="tree"></div>
-
-    <div class="uppick">
-      <!-- webkitdirectory gives the whole folder tree; each File carries a
-           webkitRelativePath, which is what preserves the nesting the crawler needs. -->
-      <label class="btn ghost">Upload folder…
-        <input type="file" id="up_dir" webkitdirectory directory multiple hidden></label>
-      <label class="btn ghost">Upload files…
-        <input type="file" id="up_files" multiple hidden
-               accept=".pdf,.doc,.docx,.xls,.xlsx,.txt"></label>
-      <span class="dim" id="up_destnote"></span>
+    <div id="tab_session">
+      <div class="uphead">
+        Uploaded files are written into the source data directory; the <b>existing</b>
+        incremental pipeline then picks them up on its own — organise → parse → embed →
+        index. Deleting removes the files <b>and</b> the indexed documents, so they stop
+        appearing in search immediately.
+      </div>
+      <div id="tree"></div>
+      <div class="uppick">
+        <label class="btn ghost">Upload folder…
+          <input type="file" id="up_dir" webkitdirectory directory multiple hidden></label>
+        <label class="btn ghost">Upload files…
+          <input type="file" id="up_files" multiple hidden
+                 accept=".pdf,.doc,.docx,.xls,.xlsx,.txt"></label>
+        <span class="dim" id="up_destnote"></span>
+      </div>
+      <div id="up_list"></div>
+      <div id="up_bar" hidden><div id="up_fill"></div></div>
+      <div id="up_msg" hidden></div>
+      <div id="up_actions" hidden>
+        <button class="btn" id="up_go">Upload &amp; process</button>
+        <button class="btn ghost" id="up_clear">Clear</button>
+      </div>
+      <div id="up_recent"></div>
     </div>
 
-    <div id="up_list"></div>
-    <div id="up_bar" hidden><div id="up_fill"></div></div>
-    <div id="up_msg" hidden></div>
+    <div id="tab_supporting" hidden>
+      <div class="uphead">
+        Reference files (financial reports, project progress, CSR) that officers pull into a
+        draft. Parsed and stored automatically on upload. <b>Not part of the Q&amp;A search</b> —
+        they never affect search results. Deleting removes the file <b>and</b> its data.
+      </div>
+      <form id="sd_form" class="mform inline">
+        <select class="gin" id="sd_cat" required><option value="">category…</option></select>
+        <input class="gin" id="sd_name" type="text" placeholder="display name (optional)">
+        <input class="gin" id="sd_period" type="text" placeholder="as-of / period (blank = auto)">
+        <label class="btn ghost">Choose file…<input type="file" id="sd_file" hidden
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.txt"></label>
+        <button class="btn" type="submit" id="sd_go" disabled>Upload</button>
+      </form>
+      <div id="sd_msg" hidden></div>
+      <div id="sd_list"><div class="mnote">Loading…</div></div>
+    </div>`);
 
-    <div id="up_actions" hidden>
-      <button class="btn" id="up_go">Upload &amp; process</button>
-      <button class="btn ghost" id="up_clear">Clear</button>
-    </div>
+  // tab switch
+  $("#modal").querySelectorAll(".uptab").forEach(b => b.onclick = () => {
+    $("#modal").querySelectorAll(".uptab").forEach(x => x.classList.toggle("on", x === b));
+    $("#tab_session").hidden = b.dataset.tab !== "session";
+    $("#tab_supporting").hidden = b.dataset.tab !== "supporting";
+  });
 
-    <div id="up_recent"></div>`);
-
+  // session tab
   PICKED = []; DEST = ""; UP_PAGE = 1;
   $("#up_dir").onchange   = e => pick(e.target.files);
   $("#up_files").onchange = e => pick(e.target.files);
@@ -1261,6 +1266,17 @@ $("#uploadBtn").onclick = () => {
   $("#up_go").onclick     = () => doUpload("fail");
   loadTree("");
   loadRecentUploads();
+
+  // supporting tab
+  SD_FILE = null;
+  loadDocCategories();
+  loadDocList();
+  $("#sd_file").onchange = e => {
+    SD_FILE = e.target.files[0] || null;
+    $("#sd_go").disabled = !SD_FILE;
+    if (SD_FILE && !$("#sd_name").value) $("#sd_name").value = SD_FILE.name.replace(/\.[^.]+$/, "");
+  };
+  $("#sd_form").onsubmit = submitDoc;
 };
 
 // ── the source tree ───────────────────────────────────────────────────────

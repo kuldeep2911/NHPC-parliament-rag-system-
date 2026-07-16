@@ -171,6 +171,84 @@ def make_doc_key(category: str, sha256: str) -> str:
     return f"{category}/{sha256[:16]}"
 
 
+def category_of_path(cfg, abs_path: str):
+    """
+    The category for a file already sitting in the supporting root, from its folder:
+    <root>/<category>/<file>. Returns None if it is not directly under a known category
+    (e.g. a stray file at the root, or a staging file).
+    """
+    root = os.path.abspath(cfg.supporting_root_abs())
+    p = os.path.abspath(abs_path)
+    try:
+        rel = os.path.relpath(p, root).replace("\\", "/")
+    except ValueError:
+        return None
+    parts = [x for x in rel.split("/") if x and x != "."]
+    if len(parts) < 2 or parts[0].startswith(".."):
+        return None
+    cat = parts[0].lower()
+    return cat if cat in cfg.supporting_categories() else None
+
+
+def ingest_path(cfg, conn, abs_path: str, *, uploaded_by="watcher", provider=None,
+                llm=None):
+    """
+    Parse + store a file that is ALREADY in the supporting tree, by its path. This is the
+    entry the WATCHER uses for a file dropped straight into the folder -- and it reuses the
+    exact same parse + as-of + store code the upload endpoint runs, so the two paths cannot
+    diverge.
+
+    Idempotent: keyed on sha256, a re-drop of the same bytes upserts (and reactivates a
+    soft-deleted row). Returns (doc_id, doc_key) or (None, None) if the file is not under a
+    known category.
+    """
+    category = category_of_path(cfg, abs_path)
+    if category is None:
+        log.warning("supporting: %s is not under a known category folder — ignored",
+                    abs_path)
+        return None, None
+
+    root = os.path.abspath(cfg.supporting_root_abs())
+    rel_path = os.path.relpath(os.path.abspath(abs_path), root).replace("\\", "/")
+    sha = sha256_of(abs_path)
+    parsed = parse_supporting_file(cfg, abs_path, provider=provider)
+
+    proposed = {"as_of_date": None, "period_label": None}
+    if getattr(cfg, "supporting_llm_asof", False):
+        proposed = propose_as_of(cfg, llm, parsed.get("document_text") or "")
+
+    doc_id = store(conn, cfg, category=category,
+                   display_name=os.path.splitext(os.path.basename(abs_path))[0],
+                   file_path=rel_path, original_filename=os.path.basename(abs_path),
+                   sha256=sha, parsed=parsed,
+                   as_of_date=proposed["as_of_date"], period_label=proposed["period_label"],
+                   uploaded_by=uploaded_by)
+    return doc_id, make_doc_key(category, sha)
+
+
+def soft_delete_path(cfg, conn, abs_path: str):
+    """
+    A file vanished from the supporting tree -> soft-delete its row (drops out of the
+    dropdown, row + tables retained). Matched on file_path, so it only affects the exact
+    document that was removed. Returns the number of rows deactivated.
+    """
+    root = os.path.abspath(cfg.supporting_root_abs())
+    try:
+        rel_path = os.path.relpath(os.path.abspath(abs_path), root).replace("\\", "/")
+    except ValueError:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute("""UPDATE supporting_documents
+                       SET is_active=false, deleted_at=now()
+                       WHERE file_path=%s AND is_active
+                       RETURNING id""", (rel_path,))
+        n = len(cur.fetchall())
+    conn.commit()
+    if n:
+        log.info("supporting: soft-deleted %s (file removed)", rel_path)
+    return n
+
+
 def store(conn, cfg, *, category, display_name, file_path, original_filename, sha256,
           parsed: dict, as_of_date, period_label, uploaded_by):
     """

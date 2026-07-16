@@ -63,8 +63,13 @@ class LockedOutputError(Exception):
     """An output folder could not be cleared because a file was locked (WinError 32)."""
 
 # Top-level directories that are never source session folders.
+#
+# supporting_documents is here for defence in depth: it lives under organized/, and the
+# crawler only ever writes session/house/question paths, so it is already out of reach --
+# but naming it explicitly means that if anyone ever points the crawler at organized/ (or
+# nests the trees), a financial report can never be mistaken for a parliamentary session.
 SKIP_TOP_LEVEL = {
-    "organized", "_reports", "_supporting", "__pycache__",
+    "organized", "_reports", "_supporting", "supporting_documents", "__pycache__",
     ".git", ".venv", "venv", ".idea", ".vscode",
 }
 

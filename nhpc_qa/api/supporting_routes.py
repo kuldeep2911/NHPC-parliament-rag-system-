@@ -197,8 +197,8 @@ async def upload(request: Request,
 
 @router.post("/admin/supporting/{doc_id}/deactivate")
 def deactivate(request: Request, doc_id: int, admin=Depends(deps.require_admin)):
-    """Soft-delete: drops out of the dropdown, row + tables retained (same discipline as the
-    Q&A watcher). Re-uploading the same bytes reactivates it."""
+    """Soft-delete: drops out of the dropdown, row + tables retained. Re-uploading the same
+    bytes reactivates it. (Kept for reactivation; DELETE removes file + data outright.)"""
     cfg, conn = _st(request)["cfg"], _st(request)["conn"]
     _enabled(cfg)
     with conn.cursor() as cur:
@@ -213,6 +213,60 @@ def deactivate(request: Request, doc_id: int, admin=Depends(deps.require_admin))
                 reason=f"id={doc_id} ({row[0]})", ip=deps.client_ip(request),
                 user_agent=request.headers.get("user-agent"))
     return {"ok": True, "id": doc_id, "is_active": False}
+
+
+@router.delete("/admin/supporting/{doc_id}")
+def delete(request: Request, doc_id: int, admin=Depends(deps.require_admin)):
+    """
+    HARD delete: remove the FILE from disk AND the row + its tables (cascade). This is what
+    "delete" means for a reference document -- unlike the Q&A watcher's soft-delete, an
+    admin clicking delete here is a deliberate, audited statement of intent.
+
+    DB row is removed FIRST, then the file: if the file delete fails, the document is
+    already gone from the dropdown and no draft can cite a file that 404s. The file is
+    resolved through the SAME realpath jail before unlinking -- a stored path is never
+    trusted to point wherever it claims.
+    """
+    cfg, conn = _st(request)["cfg"], _st(request)["conn"]
+    _enabled(cfg)
+    with conn.cursor() as cur:
+        cur.execute("SELECT file_path, display_name FROM supporting_documents WHERE id=%s",
+                    (doc_id,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "no such document")
+    rel, name = row
+
+    # resolve + jail BEFORE deleting anything
+    root = cfg.supporting_root_abs()
+    abs_path = None
+    try:
+        abs_path = guard.jail(root, guard.sanitize_relpath(rel))
+    except Rejected:
+        abs_path = None       # a bad stored path -> remove the row, skip the unlink
+
+    # 1. DB (cascade drops supporting_document_tables/_rows)
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM supporting_documents WHERE id=%s", (doc_id,))
+    conn.commit()
+
+    # 2. file
+    removed = False
+    if abs_path and os.path.isfile(abs_path):
+        try:
+            os.remove(abs_path)
+            removed = True
+        except OSError as e:
+            log.error("supporting delete: row gone but file remained: %s", e)
+
+    users.audit(conn, "supporting_deleted", success=True,
+                actor={"user_id": admin.get("db_user_id"), "email": admin["email"]},
+                reason=f"id={doc_id} ({name}) file_removed={removed}",
+                ip=deps.client_ip(request), user_agent=request.headers.get("user-agent"))
+    log.warning("HARD DELETE supporting %s (%s) by %s — file_removed=%s",
+                doc_id, name, admin["email"], removed)
+    return {"ok": True, "id": doc_id, "deleted": True, "file_removed": removed,
+            "display_name": name}
 
 
 # ---------------------------------------------------------------------------

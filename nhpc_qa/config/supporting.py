@@ -60,13 +60,23 @@ class SupportingConfig:
         return out
 
     def supporting_root_abs(self) -> str:
-        """Absolute supporting-documents root. Defaults beside the source root."""
+        """
+        Absolute supporting-documents root: organized/supporting_documents/ by default.
+
+        This sits INSIDE organized/, but it is SAFE from the Q&A pipeline for two reasons,
+        both load-bearing:
+          1. The Q&A loader globs organized/*/*/*/parsed.json (exactly three levels) -- a
+             supporting file at organized/supporting_documents/<category>/<file> never
+             matches that shape, so it is never loaded as a parliamentary question.
+          2. The crawler EXPLICITLY skips this subtree (see crawler._SKIP_DIRS), so a full
+             re-crawl -- which rewrites organized/ -- never touches or deletes it.
+        Change the location with SUPPORTING_ROOT if you must, but the two guarantees above
+        assume this default.
+        """
         if self.supporting_root:
             return os.path.abspath(self.supporting_root)
-        src = os.path.abspath(getattr(self, "source_root", None) or "Original Data")
-        # a sibling of Original Data, not a child -- so the Q&A crawler (which walks the
-        # source root) never descends into it.
-        return os.path.join(os.path.dirname(src), "supporting_documents")
+        org = os.path.abspath(getattr(self, "organized_root", None) or "organized")
+        return os.path.join(org, "supporting_documents")
 
     def validate_supporting(self):
         errs = []

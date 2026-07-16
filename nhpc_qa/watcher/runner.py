@@ -136,6 +136,82 @@ def _make_handler(cfg, conn_factory):
     return Handler()
 
 
+def _make_supporting_handler(cfg, conn_factory):
+    """
+    Watches organized/supporting_documents/. A file dropped straight into a category folder
+    is parsed + stored (into supporting_* tables, NOT the Q&A index); a file removed is
+    soft-deleted.
+
+    Supporting docs are single files, not multi-file question folders, so this settles
+    PER FILE with an in-process debounce timer rather than the durable queue: a file is
+    ingested only once it has stopped changing for settle_seconds, so a still-copying file
+    is never parsed half-written. Ingestion is idempotent (sha256), so a duplicate timer
+    firing is harmless.
+    """
+    import threading
+    from watchdog.events import FileSystemEventHandler
+    from nhpc_qa.supporting import ingest as sup_ingest
+
+    settle = max(2, int(getattr(cfg, "watch_settle_seconds", 10)))
+    timers = {}
+    lock = threading.Lock()
+
+    def _process(path, kind):
+        try:
+            with conn_factory() as conn:
+                if kind == "delete":
+                    sup_ingest.soft_delete_path(cfg, conn, path)
+                else:
+                    # The upload endpoint ALSO ingests inline; this only fires for files
+                    # placed in the folder by hand. LLM as-of is best-effort here (None if
+                    # no LLM), the admin can correct it in the Documents screen.
+                    llm = None
+                    try:
+                        from nhpc_qa.core.providers import get_llm
+                        llm = get_llm(cfg) if getattr(cfg, "supporting_llm_asof", False) else None
+                    except Exception:      # noqa: BLE001
+                        llm = None
+                    sup_ingest.ingest_path(cfg, conn, path, uploaded_by="watcher", llm=llm)
+        except Exception as e:      # noqa: BLE001 -- the watcher must never die
+            log.error("supporting ingest failed for %s: %s: %s", path, type(e).__name__, e)
+
+    def _schedule(path, kind):
+        if _ignored(path) or os.path.isdir(path):
+            return
+        # only real files under a category folder; a staging dotfile is already ignored
+        with lock:
+            t = timers.get(path)
+            if t:
+                t.cancel()
+            # a delete fires immediately (nothing to settle); an add/modify settles first
+            delay = 0.1 if kind == "delete" else settle
+            timers[path] = threading.Timer(delay, lambda: (_process(path, kind),
+                                                           timers.pop(path, None)))
+            timers[path].daemon = True
+            timers[path].start()
+        log.info("supporting event %-6s %s (settling %ss)",
+                 kind, os.path.basename(path), 0 if kind == "delete" else settle)
+
+    class SupHandler(FileSystemEventHandler):
+        def on_created(self, e):
+            if not e.is_directory:
+                _schedule(e.src_path, "upsert")
+
+        def on_modified(self, e):
+            if not e.is_directory:
+                _schedule(e.src_path, "upsert")
+
+        def on_moved(self, e):
+            _schedule(e.dest_path, "upsert")
+            _schedule(e.src_path, "delete")
+
+        def on_deleted(self, e):
+            if not e.is_directory:
+                _schedule(e.src_path, "delete")
+
+    return SupHandler()
+
+
 # ---------------------------------------------------------------------------
 # heartbeat half — "I am alive", independent of whether work is in progress
 # ---------------------------------------------------------------------------
@@ -260,6 +336,17 @@ def main(args=None):
 
     observer = Observer()
     observer.schedule(_make_handler(cfg, conn_factory), source, recursive=True)
+
+    # Second watch: supporting reference documents (organized/supporting_documents/). A
+    # file dropped there auto-parses into the supporting_* tables; a removed file is
+    # soft-deleted. Separate tables, separate handler -- it never touches the Q&A queue.
+    if getattr(cfg, "supporting_enabled", False):
+        sup_root = cfg.supporting_root_abs()
+        os.makedirs(sup_root, exist_ok=True)
+        observer.schedule(_make_supporting_handler(cfg, conn_factory), sup_root,
+                          recursive=True)
+        log.info("also watching supporting documents: %s", sup_root)
+
     observer.start()
 
     def _stop(_sig, _frm):
