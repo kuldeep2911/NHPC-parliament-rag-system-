@@ -34,3 +34,6 @@ Thumbs.db
 
 # ── Claude local settings (may contain machine paths) ───────────────────
 .claude/
+
+# Uploaded reference documents — runtime data, like organized/ and Original Data/
+supporting_documents/

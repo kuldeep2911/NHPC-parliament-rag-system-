@@ -44,7 +44,8 @@ from nhpc_qa.retrieval.graph.build import build_graph
 from nhpc_qa.core.trace.query_tracer import QueryTracer
 from nhpc_qa.core.providers.rerank import get_reranker
 from nhpc_qa.retrieval.search import entity
-from nhpc_qa.api import auth_routes, draft_routes, tree_routes, upload_routes
+from nhpc_qa.api import (auth_routes, draft_routes, supporting_routes, tree_routes,
+                         upload_routes)
 from nhpc_qa.api.security import audit, deps, paths, rbac, users
 
 log = logging.getLogger("nhpc.phase4.api")
@@ -137,6 +138,9 @@ app.include_router(tree_routes.router)
 # /draft — grounded draft assistance. A SEPARATE endpoint, not a graph node: /query must
 # never wait for an LLM. Called by the UI after the results are already on screen.
 app.include_router(draft_routes.router)
+# /supporting — reference documents an officer pulls into a draft. Separate tables, no
+# embeddings, never in the Q&A search index.
+app.include_router(supporting_routes.router)
 
 
 def identity(request: Request):

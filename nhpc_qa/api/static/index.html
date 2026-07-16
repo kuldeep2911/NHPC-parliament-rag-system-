@@ -284,9 +284,44 @@
   .cite { font-size:10.5px; font-family:ui-monospace, SFMono-Regular, monospace;
           background:#eef2f7; color:var(--navy); border:1px solid #cdd6e0;
           border-radius:4px; padding:1px 6px; }
+  /* a supporting-document citation is a DIFFERENT authority — amber, not navy */
+  .cite.doc { background:#fbf3e3; color:#8a6a1f; border-color:#e6d4a8; }
   .uncited { display:inline-block; margin-top:5px; font-size:11px; font-weight:600;
              color:#9a3b32; background:#fdf0ef; border:1px solid #f0cfcb;
              border-radius:4px; padding:1px 7px; }
+
+  /* draft options: reference-document picker + prompt box */
+  .draftopts { background:#fff; border:1px solid var(--line); border-radius:12px;
+               padding:18px 20px; margin-bottom:16px; }
+  .opts-h { font-size:12.5px; font-weight:600; color:#40464e; margin-bottom:8px; }
+  .doccat { margin-bottom:10px; }
+  .doccat-h { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+              color:#8a8f96; margin:8px 0 4px; }
+  .docrow { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:7px;
+            cursor:pointer; font-size:13px; }
+  .docrow:hover { background:#faf9f7; }
+  .docrow.on { background:#eef5f0; }
+  .docname { flex:1; min-width:0; color:var(--ink2); font-weight:500; white-space:nowrap;
+             overflow:hidden; text-overflow:ellipsis; }
+  .docperiod { font-size:11.5px; color:var(--mut2); white-space:nowrap; }
+  .promptbox { width:100%; font:13.5px 'Inter', system-ui, sans-serif; padding:9px 12px;
+               border:1.5px solid #d7d4ce; border-radius:8px; resize:vertical; }
+
+  /* contradictions — the core value, surfaced not smoothed */
+  .contrabox { background:#fdf0ef; border:1px solid #f0cfcb; border-radius:9px;
+               padding:14px 16px; margin:8px 0 18px; }
+  .contra-h { font-size:12.5px; font-weight:700; color:#9a3b32; margin-bottom:4px; }
+  .contra { border-top:1px solid #f0cfcb; padding:9px 0 2px; }
+  .contra:first-of-type { border-top:0; }
+  .contra-topic { font-size:13px; font-weight:600; color:#7d2f28; margin-bottom:4px; }
+  .contra-line { font-size:13px; color:#33383e; line-height:1.55; margin:2px 0; }
+  .tag-past, .tag-cur { display:inline-block; font-size:10px; font-weight:700;
+                        text-transform:uppercase; letter-spacing:.03em; padding:1px 6px;
+                        border-radius:4px; margin-right:6px; }
+  .tag-past { background:#e7edf5; color:#1b3a63; }
+  .tag-cur  { background:#fbf3e3; color:#8a6a1f; }
+  .linklike { background:none; border:0; color:var(--navy); font-size:12px; cursor:pointer;
+              text-decoration:underline; padding:0 0 0 6px; }
   .dkp { margin:0; padding-left:20px; }
   .dkp li { font-size:13.5px; color:var(--ink2); line-height:1.6; margin-bottom:7px; }
   .dgaps { margin:0; padding-left:20px; }
@@ -357,6 +392,7 @@
       <!-- Rendered only for admins AND enforced on the server: an officer who forges this
            button still gets 403 from /admin/*. -->
       <button class="btn ghost small" id="uploadBtn" hidden>Upload</button>
+      <button class="btn ghost small" id="docsBtn" hidden>Documents</button>
       <button class="btn ghost small" id="adminBtn" hidden>Users</button>
       <button class="btn ghost small" id="pwBtn">Change password</button>
       <button class="btn ghost small" id="outBtn">Sign out</button>
@@ -549,9 +585,12 @@ function render(d) {
     + (n
        ? `<div class="draftbar">
             <button class="btn" id="draftGo">✎ Generate draft reply</button>
+            <button class="btn ghost" id="draftOpts" aria-expanded="false">＋ Reference documents &amp; prompt</button>
             <span class="dim">Builds a cited draft from these past replies. You review it —
               it is never an approved answer.</span>
-          </div><div id="draftbox"></div>`
+          </div>
+          <div id="draftPanelOpts" hidden></div>
+          <div id="draftbox"></div>`
        : "");
 
   if (!n) {
@@ -569,7 +608,11 @@ function render(d) {
   // The draft is a SEPARATE call, made only when the officer asks. /query never waits for
   // an LLM — most searches are "has this been asked before?", and drafting every one of
   // them would burn a model call on a draft nobody reads.
-  setTimeout(() => { const b = $("#draftGo"); if (b) b.onclick = () => generateDraft(); }, 0);
+  SUPPORTING_SELECTED.clear();
+  setTimeout(() => {
+    const b = $("#draftGo"); if (b) b.onclick = () => generateDraft();
+    const o = $("#draftOpts"); if (o) o.onclick = () => toggleDraftOpts();
+  }, 0);
 
   $("#out").innerHTML = '<div class="cards">' + d.results.map(r => {
     // File controls are BUTTONS, not <a href> links.
@@ -707,20 +750,86 @@ function closePast() { $("#pastPanel").hidden = true;  $("#recent").setAttribute
 // ═══════════════════════════════════════════════════════════════════════════
 // DRAFT ASSIST
 // ═══════════════════════════════════════════════════════════════════════════
+// Reference documents the officer has selected for THIS draft. IDs only — the server loads
+// the content by id, so the browser can never inject arbitrary text as an NHPC document.
+const SUPPORTING_SELECTED = new Set();
+let SUPPORTING_CACHE = null;          // the doc list, fetched once per session
+
+async function toggleDraftOpts() {
+  const el = $("#draftPanelOpts"), btn = $("#draftOpts");
+  if (!el) return;
+  if (!el.hidden) { el.hidden = true; btn.setAttribute("aria-expanded", "false"); return; }
+  el.hidden = false; btn.setAttribute("aria-expanded", "true");
+  el.innerHTML = `<div class="draftopts"><div class="mnote">Loading reference documents…</div></div>`;
+
+  if (SUPPORTING_CACHE === null) {
+    try { SUPPORTING_CACHE = (await (await api("/supporting")).json()).documents || []; }
+    catch (e) { SUPPORTING_CACHE = []; }   // feature off or unreachable -> prompt box only
+  }
+  drawDraftOpts();
+}
+
+function drawDraftOpts() {
+  const el = $("#draftPanelOpts");
+  const docs = SUPPORTING_CACHE || [];
+  // group by category, preserving the server's order
+  const groups = {};
+  for (const d of docs) (groups[d.category_label] ||= []).push(d);
+
+  const docHtml = docs.length ? Object.entries(groups).map(([cat, list]) => `
+    <div class="doccat"><div class="doccat-h">${esc(cat)}</div>
+      ${list.map(d => `
+        <label class="docrow ${SUPPORTING_SELECTED.has(d.id) ? "on" : ""}">
+          <input type="checkbox" data-sid="${d.id}" ${SUPPORTING_SELECTED.has(d.id) ? "checked" : ""}>
+          <span class="docname">${esc(d.display_name)}</span>
+          <span class="docperiod">${esc(d.period_label || (d.as_of_date ? "as on " + d.as_of_date : "period unknown"))}</span>
+          ${d.needs_review ? '<span class="pill" title="a parsing warning, not a correctness gate">flagged</span>' : ""}
+        </label>`).join("")}
+    </div>`).join("")
+    : `<div class="mnote">No reference documents have been uploaded yet.${ME && ME.role === "admin"
+        ? ` Use <b>Documents</b> in the header to add some.` : ""}</div>`;
+
+  el.innerHTML = `
+    <div class="draftopts">
+      <div class="opts-h">Reference documents <span class="dim">— optional. Their current
+        figures are added to the draft, each cited with its as-of date. Q&amp;A search is
+        unaffected.</span></div>
+      ${docHtml}
+      <div class="opts-h" style="margin-top:14px;">Prompt <span class="dim">— optional
+        guidance (e.g. “use the financial report for the cost figures”). It steers emphasis;
+        it cannot override the grounding rules.</span></div>
+      <textarea id="draftPrompt" class="promptbox" rows="2"
+        placeholder="Optional guidance for the draft…">${esc(DRAFT_PROMPT)}</textarea>
+    </div>`;
+
+  el.querySelectorAll("input[data-sid]").forEach(cb => cb.onchange = () => {
+    const id = +cb.dataset.sid;
+    cb.checked ? SUPPORTING_SELECTED.add(id) : SUPPORTING_SELECTED.delete(id);
+    cb.closest(".docrow").classList.toggle("on", cb.checked);
+  });
+  const pb = $("#draftPrompt");
+  if (pb) pb.oninput = () => { DRAFT_PROMPT = pb.value; };
+}
+let DRAFT_PROMPT = "";
+
 // Called ONLY when the officer clicks. The draft is built server-side from the run_id, so
 // the browser never gets to choose what the model is grounded in — it re-reads the exact
-// results the officer was shown.
+// results the officer was shown. Selected reference-doc IDs + the prompt ride along.
 async function generateDraft() {
   const btn = $("#draftGo"), box = $("#draftbox");
   if (!RUN_ID || !btn || !box) return;
   btn.disabled = true;
   const label = btn.textContent;
   btn.textContent = "drafting…";
-  box.innerHTML = `<div class="draftpanel"><div class="mnote">Reading the past replies and
-    drafting… this takes a few seconds.</div></div>`;
+  const nSel = SUPPORTING_SELECTED.size;
+  box.innerHTML = `<div class="draftpanel"><div class="mnote">Reading the past replies${
+    nSel ? ` and ${nSel} reference document${nSel === 1 ? "" : "s"}` : ""} and drafting…
+    this takes a few seconds.</div></div>`;
   try {
     const r = await api("/draft", { method: "POST", headers: headers(),
-                                    body: JSON.stringify({ run_id: RUN_ID }) });
+                                    body: JSON.stringify({ run_id: RUN_ID,
+                                      supporting_ids: [...SUPPORTING_SELECTED],
+                                      prompt: DRAFT_PROMPT }) });
     const d = await r.json();
     if (!d.draft) {
       // FAILS SOFT. The results are still on screen; only the optional draft is missing.
@@ -746,18 +855,41 @@ const PATTERN_NOTE = {
 };
 
 function renderDraft(D) {
+  // Dual citation: a DOC: cite is a supporting document (internal current data), a plain
+  // cite is a past parliamentary reply. They are DIFFERENT authorities and look different.
+  const one = c => /^DOC:/.test(c)
+    ? `<span class="cite doc" title="supporting document — internal current data">${esc(c)}</span>`
+    : `<span class="cite">${esc(c)}</span>`;
   const cite = cs => (cs && cs.length)
-    ? `<span class="cites">${cs.map(c => `<span class="cite">${esc(c)}</span>`).join("")}</span>`
+    ? `<span class="cites">${cs.map(one).join("")}</span>`
     // An uncited point is never quietly shown as if it were sourced.
-    : `<span class="uncited">⚠ uncited — no past reply supports this</span>`;
+    : `<span class="uncited">⚠ uncited — no source supports this</span>`;
+
+  const contradictions = D.contradictions || [];
+  const sup = D.supporting_sources || [];
 
   $("#draftbox").innerHTML = `
     <div class="draftpanel">
       <div class="draftnotice">⚠ DRAFT — FOR OFFICER REVIEW.
-        Generated from NHPC's past replies only. Verify every figure against the cited
-        sources. <b>This is not an approved reply.</b></div>
+        ${esc(D.notice || "Verify every figure against the cited sources.")}
+        <b>This is not an approved reply.</b></div>
 
       <div class="patnote"><b>${esc(D.pattern)}</b> — ${esc(PATTERN_NOTE[D.pattern] || "")}</div>
+
+      ${contradictions.length ? `
+        <div class="contrabox">
+          <div class="contra-h">⚠ Contradictions — past reply vs current data</div>
+          <div class="dim" style="margin-bottom:8px;">The current internal data disagrees
+            with what was told to Parliament. Reconcile before use — this is not smoothed over.</div>
+          ${contradictions.map(c => `
+            <div class="contra">
+              <div class="contra-topic">${esc(c.topic || "")}</div>
+              <div class="contra-line"><span class="tag-past">past reply</span>
+                ${esc(c.past || "")} ${c.past_cite ? one(c.past_cite) : ""}</div>
+              <div class="contra-line"><span class="tag-cur">current data</span>
+                ${esc(c.current || "")} ${c.current_cite ? one(c.current_cite) : ""}</div>
+            </div>`).join("")}
+        </div>` : ""}
 
       <h4 class="dh">Draft answer</h4>
       ${(D.parts || []).map(p => `
@@ -773,17 +905,29 @@ function renderDraft(D) {
 
       ${(D.gaps || []).length ? `
         <h4 class="dh gap">Gaps — officer input needed</h4>
-        <div class="dim" style="margin-bottom:6px;">The past replies do not cover these.
+        <div class="dim" style="margin-bottom:6px;">The sources do not cover these.
           Nothing has been invented for them.</div>
         <ul class="dgaps">${D.gaps.map(g => `
           <li>${g.part ? `<b>${esc(g.part)}</b> — ` : ""}${esc(g.reason)}</li>`).join("")}</ul>` : ""}
 
-      <h4 class="dh">Sources</h4>
-      <table class="utab"><thead><tr><th>Citation</th><th>Answered</th><th>Type</th></tr></thead>
-        <tbody>${(D.sources || []).map(s => `<tr>
-          <td>${esc(s.citation)}</td>
-          <td class="dim">${esc(s.reply_date || "—")}</td>
-          <td>${badge(s.answer_type)}</td></tr>`).join("")}</tbody></table>
+      ${(D.sources || []).length ? `
+        <h4 class="dh">Sources — past parliamentary replies</h4>
+        <table class="utab"><thead><tr><th>Citation</th><th>Answered</th><th>Type</th></tr></thead>
+          <tbody>${D.sources.map(s => `<tr>
+            <td>${esc(s.citation)}</td>
+            <td class="dim">${esc(s.reply_date || "—")}</td>
+            <td>${badge(s.answer_type)}</td></tr>`).join("")}</tbody></table>` : ""}
+
+      ${sup.length ? `
+        <h4 class="dh">Sources — supporting documents <span class="dim">(internal current data)</span></h4>
+        <table class="utab"><thead><tr><th>Citation</th><th>Category</th><th>Document</th><th>As of / period</th></tr></thead>
+          <tbody>${sup.map(s => `<tr>
+            <td><span class="cite doc">${esc(s.citation)}</span></td>
+            <td class="dim">${esc(s.category_label || s.category || "")}</td>
+            <td>${esc(s.display_name || "")}
+              <button class="linklike" data-supfile="${s.id}">open</button></td>
+            <td class="dim">${esc(s.period_label || (s.as_of_date ? "as on " + s.as_of_date : "—"))}</td>
+          </tr>`).join("")}</tbody></table>` : ""}
 
       ${D.citations_dropped ? `<div class="gerr" style="margin-top:12px;">
         ${D.citations_dropped} invented citation(s) were removed from this draft.</div>` : ""}
@@ -800,8 +944,10 @@ function renderDraft(D) {
     try {
       // fetch() with the session cookie, then hand the bytes to the browser as a blob —
       // exactly as the /file buttons do. A plain link cannot carry the session.
+      // Send the SAME selections so the .docx matches the draft on screen.
       const r = await fetch("/draft/docx", { method: "POST", headers: headers(),
-                                             body: JSON.stringify({ run_id: RUN_ID }) });
+        body: JSON.stringify({ run_id: RUN_ID,
+          supporting_ids: [...SUPPORTING_SELECTED], prompt: DRAFT_PROMPT }) });
       if (!r.ok) { alert("Could not build the document."); return; }
       const blob = await r.blob();
       const cd = r.headers.get("content-disposition") || "";
@@ -813,6 +959,17 @@ function renderDraft(D) {
       setTimeout(() => URL.revokeObjectURL(url), 30000);
     } finally { b.disabled = false; b.textContent = t; }
   };
+
+  // open a cited supporting document — same fetch-with-cookie → blob pattern as /file.
+  $("#draftbox").querySelectorAll("button[data-supfile]").forEach(btn => btn.onclick = async () => {
+    try {
+      const r = await fetch("/supporting/file?doc_id=" + btn.dataset.supfile, { headers: headers() });
+      if (!r.ok) { alert("Could not open the document."); return; }
+      const url = URL.createObjectURL(await r.blob());
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) { alert("Could not open the document."); }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -836,6 +993,7 @@ function showApp() {
   // Drawn for admins only — but the SERVER is what enforces it (see /admin/* -> 403).
   $("#adminBtn").hidden = ME.role !== "admin";
   $("#uploadBtn").hidden = ME.role !== "admin";
+  $("#docsBtn").hidden = ME.role !== "admin";
   $("#q").focus();
 }
 
@@ -967,6 +1125,101 @@ let PICKED = [];      // [{file, path}]
 // and Delete acts ON it. "" = the source root (where a whole new session goes).
 let DEST = "";
 let UP_PAGE = 1;
+
+// ── ADMIN: supporting reference documents ──────────────────────────────────
+$("#docsBtn").onclick = () => {
+  openModal("Reference documents", `
+    <div class="uphead">
+      Reference files (financial reports, project progress, CSR) that officers pull into a
+      draft. <b>Not part of the Q&amp;A search</b> — they are draft-time context only, and
+      never affect search results.
+    </div>
+    <form id="sd_form" class="mform inline">
+      <select class="gin" id="sd_cat" required><option value="">category…</option></select>
+      <input class="gin" id="sd_name" type="text" placeholder="display name (optional)">
+      <input class="gin" id="sd_period" type="text" placeholder="as-of / period (blank = auto)">
+      <label class="btn ghost">Choose file…<input type="file" id="sd_file" hidden
+        accept=".pdf,.doc,.docx,.xls,.xlsx,.txt"></label>
+      <button class="btn" type="submit" id="sd_go" disabled>Upload</button>
+    </form>
+    <div id="sd_msg" hidden></div>
+    <div id="sd_list"><div class="mnote">Loading…</div></div>`);
+  SD_FILE = null;
+  loadDocCategories();
+  loadDocList();
+  $("#sd_file").onchange = e => {
+    SD_FILE = e.target.files[0] || null;
+    $("#sd_go").disabled = !SD_FILE;
+    if (SD_FILE && !$("#sd_name").value) $("#sd_name").value = SD_FILE.name.replace(/\.[^.]+$/, "");
+  };
+  $("#sd_form").onsubmit = submitDoc;
+};
+let SD_FILE = null;
+
+async function loadDocCategories() {
+  try {
+    const d = await (await api("/supporting/categories")).json();
+    const sel = $("#sd_cat");
+    (d.categories || []).forEach(c => {
+      const o = document.createElement("option"); o.value = c.slug; o.textContent = c.label;
+      sel.appendChild(o);
+    });
+  } catch (e) { /* feature off */ }
+}
+
+async function loadDocList() {
+  const el = $("#sd_list");
+  try {
+    const d = await (await api("/supporting")).json();
+    const docs = d.documents || [];
+    if (!docs.length) { el.innerHTML = '<div class="mnote">No reference documents yet.</div>'; return; }
+    el.innerHTML = `<table class="utab"><thead><tr>
+      <th>Document</th><th>Category</th><th>As of / period</th><th>Pages</th><th></th></tr></thead>
+      <tbody>${docs.map(u => `<tr>
+        <td>${esc(u.display_name)} ${u.needs_review ? '<span class="pill">flagged</span>' : ""}</td>
+        <td class="dim">${esc(u.category_label)}</td>
+        <td class="dim">${esc(u.period_label || (u.as_of_date ? "as on " + u.as_of_date : "—"))}</td>
+        <td class="dim">${u.page_count ?? "—"}</td>
+        <td class="acts"><button class="btn ghost small danger" data-off="${u.id}" data-nm="${esc(u.display_name)}">Remove</button></td>
+      </tr>`).join("")}</tbody></table>`;
+    el.querySelectorAll("button[data-off]").forEach(b => b.onclick = async () => {
+      if (!confirm(`Remove "${b.dataset.nm}" from the reference-document list?\n\nOfficers will no longer see it. The file and its data are retained.`)) return;
+      try {
+        await api(`/admin/supporting/${b.dataset.off}/deactivate`, { method: "POST", headers: headers(), body: "{}" });
+        SUPPORTING_CACHE = null;      // force the draft dropdown to refresh
+        loadDocList();
+      } catch (e) { alert("Could not remove: " + e.message); }
+    });
+  } catch (e) { el.innerHTML = `<div class="gerr">${esc(e.message)}</div>`; }
+}
+
+async function submitDoc(e) {
+  e.preventDefault();
+  const msg = $("#sd_msg");
+  if (!SD_FILE || !$("#sd_cat").value) { msg.className = "gerr"; msg.textContent = "Pick a category and a file."; msg.hidden = false; return; }
+  const go = $("#sd_go"); go.disabled = true; go.textContent = "uploading…";
+  const fd = new FormData();
+  fd.append("file", SD_FILE, SD_FILE.name);
+  fd.append("category", $("#sd_cat").value);
+  fd.append("display_name", $("#sd_name").value);
+  fd.append("period_label", $("#sd_period").value);
+  try {
+    // multipart: no JSON Content-Type header, cookie carried automatically.
+    const r = await fetch("/admin/supporting/upload", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.className = "gerr"; msg.innerHTML = esc(d.detail?.message || d.detail || "Upload failed."); msg.hidden = false; return; }
+    msg.className = "gok";
+    msg.innerHTML = `Uploaded <b>${esc(d.display_name)}</b> — ${d.tables} table(s), period
+      <b>${esc(d.period_label || (d.as_of_date ? "as on " + d.as_of_date : "unknown"))}</b>${
+      d.as_of_proposed_by_llm ? " <span class='dim'>(period detected automatically — check it)</span>" : ""}${
+      d.needs_review ? " <span class='pill'>flagged for review</span>" : ""}`;
+    msg.hidden = false;
+    $("#sd_form").reset(); SD_FILE = null; $("#sd_go").disabled = true;
+    SUPPORTING_CACHE = null;         // refresh the draft dropdown next time it opens
+    loadDocList();
+  } catch (err) { msg.className = "gerr"; msg.textContent = String(err); msg.hidden = false; }
+  finally { go.disabled = false; go.textContent = "Upload"; }
+}
 
 $("#uploadBtn").onclick = () => {
   openModal("Source data", `

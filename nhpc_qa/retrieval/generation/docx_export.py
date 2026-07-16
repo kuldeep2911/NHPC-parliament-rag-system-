@@ -177,10 +177,27 @@ def build_docx(query: str, draft: dict, *, user_email: str | None = None,
             _font(para.add_run(reason), size=10.5, hindi=_is_hindi(reason))
         _para(doc, "", space_after=8)
 
-    # ---- sources --------------------------------------------------------
+    # ---- contradictions — surfaced, not smoothed -----------------------
+    contradictions = draft.get("contradictions") or []
+    if contradictions:
+        _heading(doc, "⚠ CONTRADICTIONS — PAST REPLY vs CURRENT DATA")
+        _para(doc, "The current internal data disagrees with what was told to Parliament. "
+                   "Reconcile before use.", size=9.5, italic=True, color=_RED, space_after=4)
+        for c in contradictions:
+            para = doc.add_paragraph(style="List Bullet")
+            para.paragraph_format.space_after = Pt(3)
+            topic = (c.get("topic") or "").strip()
+            if topic:
+                _font(para.add_run(topic + " — "), size=10.5, bold=True, hindi=_is_hindi(topic))
+            _font(para.add_run(f"past: {c.get('past','')} [{c.get('past_cite','')}]  ·  "
+                               f"current: {c.get('current','')} [{c.get('current_cite','')}]"),
+                  size=10, hindi=_is_hindi((c.get('past') or '') + (c.get('current') or '')))
+        _para(doc, "", space_after=8)
+
+    # ---- sources: past parliamentary replies ---------------------------
     sources = draft.get("sources") or []
     if sources:
-        _heading(doc, "SOURCES — THE PAST REPLIES THIS DRAFT WAS BUILT FROM")
+        _heading(doc, "SOURCES — PAST PARLIAMENTARY REPLIES")
         t = doc.add_table(rows=1, cols=5)
         t.style = "Table Grid"
         t.alignment = WD_TABLE_ALIGNMENT.LEFT
@@ -195,6 +212,31 @@ def build_docx(query: str, draft: dict, *, user_email: str | None = None,
             for i, v in enumerate(vals):
                 row[i].text = ""
                 _font(row[i].paragraphs[0].add_run(str(v)), size=9)
+        _para(doc, "", space_after=10)
+
+    # ---- sources: supporting documents (a DIFFERENT authority) ---------
+    sup = draft.get("supporting_sources") or []
+    if sup:
+        _heading(doc, "SOURCES — SUPPORTING DOCUMENTS (internal current data)")
+        _para(doc, "Figures from these carry their as-of date/period. Internal data, not a "
+                   "past parliamentary reply.", size=9, italic=True, color=_GREY, space_after=4)
+        t = doc.add_table(rows=1, cols=4)
+        t.style = "Table Grid"
+        t.alignment = WD_TABLE_ALIGNMENT.LEFT
+        for i, h in enumerate(("Citation", "Category", "Document", "As of / Period")):
+            cell = t.rows[0].cells[i]
+            cell.text = ""
+            _font(cell.paragraphs[0].add_run(h), size=9, bold=True)
+        for s in sup:
+            row = t.add_row().cells
+            period = s.get("period_label") or (
+                f"as on {s['as_of_date']}" if s.get("as_of_date") else "—")
+            vals = (s.get("citation") or "", s.get("category_label") or s.get("category") or "",
+                    s.get("display_name") or "", period)
+            for i, v in enumerate(vals):
+                row[i].text = ""
+                _font(row[i].paragraphs[0].add_run(str(v)), size=9,
+                      hindi=_is_hindi(str(v)))
         _para(doc, "", space_after=10)
 
     # ---- footer, on every page -----------------------------------------

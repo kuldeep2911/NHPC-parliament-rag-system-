@@ -106,7 +106,7 @@ def _audit(conn, event, who, run_id, query, detail=None):
         log.error("draft audit failed: %s: %s", type(e).__name__, e)
 
 
-def _build(request: Request, run_id: str, who):
+def _build(request: Request, run_id: str, who, supporting_ids=None, officer_prompt=None):
     """Shared by /draft and /draft/docx. Returns (query, draft) or raises HTTPException."""
     cfg, conn = _st(request)["cfg"], _st(request)["conn"]
 
@@ -120,8 +120,19 @@ def _build(request: Request, run_id: str, who):
         raise HTTPException(404, "no such run_id — run the search again")
 
     results = _load_results(conn, run_id)
-    if not results:
-        raise HTTPException(404, "that search returned no results to draft from")
+
+    # Selected supporting documents (optional). Empty -> the draft is byte-identical to
+    # before this feature. Loaded from the DB by ID so the client can only reference real,
+    # active documents -- never inject arbitrary text.
+    supporting = _load_supporting(request, cfg, conn, supporting_ids)
+
+    # No past Q&A AND no supporting doc -> nothing to ground on. But a draft grounded ONLY
+    # in a supporting document is valid: a financial question may have no past parliamentary
+    # precedent, yet the financial digest IS the answer. So we only reject when BOTH are
+    # empty. build_draft handles the "supporting only" case (usable=[] but supporting!=[]).
+    if not results and not supporting:
+        raise HTTPException(404, "that search returned no results, and no supporting "
+                                 "document was selected — nothing to draft from")
 
     # Built lazily, and only when drafting is actually used: nothing is constructed when
     # the feature is off, and a broken LLM config cannot stop the API from starting.
@@ -135,7 +146,55 @@ def _build(request: Request, run_id: str, who):
             log.warning("draft: no LLM available (%s: %s)", type(e).__name__, e)
             return query, {"ok": False, "reason": "no drafting model is configured"}
 
-    return query, assist.build_draft(cfg, llm, query, results, run_id=run_id)
+    return query, assist.build_draft(cfg, llm, query, results, run_id=run_id,
+                                     supporting=supporting, officer_prompt=officer_prompt)
+
+
+def _load_supporting(request, cfg, conn, ids):
+    """
+    Load the selected supporting documents -- text + a flattened rendering of their tables --
+    from the DB, by ID. Only ACTIVE documents; a stale/deleted id is silently skipped.
+
+    Returns [] when nothing is selected or the feature is off, so the draft path is
+    unchanged. The client sends only IDs, never content: it cannot feed the model arbitrary
+    text dressed up as an NHPC document.
+    """
+    if not ids or not getattr(cfg, "supporting_enabled", False):
+        return []
+    ids = [int(i) for i in ids if str(i).strip().isdigit()][:8]   # bound the payload
+    if not ids:
+        return []
+    labels = cfg.supporting_categories()
+    out = []
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, category, display_name, period_label, as_of_date, page_count,
+                   document_text
+            FROM supporting_documents
+            WHERE id = ANY(%s) AND is_active
+            ORDER BY category, display_name
+        """, (ids,))
+        docs = [dict(zip([c.name for c in cur.description], r)) for r in cur.fetchall()]
+        for d in docs:
+            cur.execute("""
+                SELECT t.orientation, t.nl_rendering
+                FROM supporting_document_tables t
+                WHERE t.supporting_doc_id = %s ORDER BY t.table_index
+            """, (d["id"],))
+            tbls = cur.fetchall()
+            tables_text = "\n\n".join(
+                f"TABLE ({orient}):\n{nl}" for orient, nl in tbls if nl)
+            out.append({
+                "id": d["id"], "category": d["category"],
+                "category_label": labels.get(d["category"], d["category"]),
+                "display_name": d["display_name"],
+                "period_label": d["period_label"],
+                "as_of_date": d["as_of_date"].isoformat() if d["as_of_date"] else None,
+                "page_count": d["page_count"],
+                "document_text": d["document_text"],
+                "tables_text": tables_text,
+            })
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +204,9 @@ def _build(request: Request, run_id: str, who):
 def draft(request: Request, payload: dict = Body(...), who=Depends(deps.require_user)):
     conn = _st(request)["conn"]
     run_id = (payload.get("run_id") or "").strip()
-    query, out = _build(request, run_id, who)
+    sup_ids = payload.get("supporting_ids") or []
+    prompt = payload.get("prompt") or ""
+    query, out = _build(request, run_id, who, supporting_ids=sup_ids, officer_prompt=prompt)
 
     if not out.get("ok"):
         # 200, not 5xx. The officer's results are fine; only the optional draft failed, and
@@ -155,9 +216,12 @@ def draft(request: Request, payload: dict = Body(...), who=Depends(deps.require_
         return {"draft": None, "reason": out.get("reason", "draft unavailable")}
 
     d = out["draft"]
+    # audit WHICH supporting docs fed the draft, joined to run_id -> full traceability
+    sup_cited = ",".join(str(s["id"]) for s in d.get("supporting_sources") or []) or "none"
     _audit(conn, "draft_generated", who, run_id, query,
            f"{len(d['parts'])} parts, {len(d['key_points'])} key points, "
-           f"{len(d['gaps'])} gaps, pattern={d['pattern']}, "
+           f"{len(d['gaps'])} gaps, {len(d.get('contradictions') or [])} contradictions, "
+           f"pattern={d['pattern']}, supporting_docs=[{sup_cited}], "
            f"{d['citations_dropped']} invented citations dropped")
     return {"draft": d}
 
@@ -170,7 +234,9 @@ def draft_docx(request: Request, payload: dict = Body(...),
                who=Depends(deps.require_user)):
     conn = _st(request)["conn"]
     run_id = (payload.get("run_id") or "").strip()
-    query, out = _build(request, run_id, who)
+    query, out = _build(request, run_id, who,
+                        supporting_ids=payload.get("supporting_ids") or [],
+                        officer_prompt=payload.get("prompt") or "")
 
     if not out.get("ok"):
         _audit(conn, "draft_docx_failed", who, run_id, query, out.get("reason"))

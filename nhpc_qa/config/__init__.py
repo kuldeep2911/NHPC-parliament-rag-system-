@@ -45,13 +45,15 @@ from nhpc_qa.config.index import Phase3Config as IndexConfig  # DB, embeddings
 from nhpc_qa.config.retrieval import Phase4Config as RetrievalConfig   # retrieval, rerank, API
 from nhpc_qa.config.auth import AuthConfig                    # sessions, Argon2, lockout
 from nhpc_qa.config.draft import DraftConfig                  # draft-assist (endpoint, not the graph node)
+from nhpc_qa.config.supporting import SupportingConfig       # supporting reference documents
 from nhpc_qa.config.upload import UploadConfig                # admin upload intake
 
 from nhpc_qa.config.parse import load_dotenv                  # noqa: F401 (re-export)
 
 
 @dataclass
-class Settings(RetrievalConfig, ParseConfig, AuthConfig, UploadConfig, DraftConfig):
+class Settings(RetrievalConfig, ParseConfig, AuthConfig, UploadConfig, DraftConfig,
+               SupportingConfig):
     """
     The single application config. Inherits every field of all four trees.
 
@@ -85,6 +87,8 @@ class Settings(RetrievalConfig, ParseConfig, AuthConfig, UploadConfig, DraftConf
         errs += [e for e in self.validate_upload() if e not in errs]
         # draft-assist (no-op when DRAFT_ENABLED=false)
         errs += [e for e in self.validate_draft() if e not in errs]
+        # supporting documents (no-op when SUPPORTING_ENABLED=false)
+        errs += [e for e in self.validate_supporting() if e not in errs]
         return _dedup(errs)
 
     def describe_all(self) -> dict:
