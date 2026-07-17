@@ -81,11 +81,27 @@ already answered, with the answers it gave. Draft a reply to the new question.
 7. STRUCTURE. If the new question has sub-parts ((a), (b), (c)...), answer point-wise with
    one entry per part. Otherwise write a single part with label "".
 
+8. REPLY FORMAT. These drafts become NHPC's official reply, so MATCH the format of the past
+   replies you were given:
+   - a SUBJECT line in their style ("Information for framing the reply of <House> question
+     regarding <topic>"), drawn from the new question;
+   - the standard OPENING the past replies use ("The information ... is as under:-" for a
+     substantive reply; "May be replied by Ministry of Power. As far as NHPC is concerned,
+     ..." for a deferral);
+   - the point-wise (a)/(b)/(c) body;
+   - a standard CLOSING if the past replies use one.
+   Put the subject in "subject", the opening in "opening", the closing in "closing". Keep
+   each part's "text" as the answer to that part only. Match the register exactly -- do not
+   invent a house style the past replies do not use.
+
 Return STRICT JSON only, no prose outside it:
 
 {
   "language": "en" | "hi",
   "pattern": "substantive" | "deferred_to_ministry" | "nil" | "not_applicable" | "mixed",
+  "subject": "<reply subject line in the past-replies' style>",
+  "opening": "<the standard opening sentence>",
+  "closing": "<standard closing, or empty string>",
   "parts": [
     {"label": "(a)", "text": "<the drafted reply for this part>",
      "cites": ["2023-jul-aug lok_sabha 8779"]}
@@ -231,7 +247,11 @@ _JSON_RE = re.compile(r"\{.*\}", re.S)
 
 
 def _parse_json(raw: str):
-    """The model's JSON, tolerantly. A thinking model may wrap it in prose or a fence."""
+    """
+    The model's JSON, tolerantly. A thinking model may wrap it in prose or a fence, and a
+    long answer over a big table can TRUNCATE mid-array when it hits the token cap -- so we
+    also try to repair a cut-off object by closing the open brackets.
+    """
     if not raw:
         return None
     s = raw.strip()
@@ -240,13 +260,66 @@ def _parse_json(raw: str):
     try:
         return json.loads(s)
     except json.JSONDecodeError:
-        m = _JSON_RE.search(s)
-        if not m:
-            return None
+        pass
+    m = _JSON_RE.search(s)
+    if m:
         try:
             return json.loads(m.group(0))
         except json.JSONDecodeError:
-            return None
+            pass
+    # TRUNCATION REPAIR: the parts we care about (subject/opening/parts) come FIRST in the
+    # schema, so a response cut off inside a later array (key_points) still has them. Trim
+    # to the last complete element and close the structure.
+    return _repair_truncated(s)
+
+
+def _repair_truncated(s: str):
+    """
+    Best-effort close of a JSON object truncated mid-array/string. Returns a dict or None.
+    Never raises.
+
+    Walks the string tracking the bracket stack, and remembers the stack SNAPSHOT at each
+    clean element boundary (a ',' or a '}'/']' at depth >= 1). To repair, we truncate to the
+    last such boundary and close whatever was open THERE -- not at the end, where a
+    half-written trailing element would have pushed extra brackets.
+    """
+    i = s.find("{")
+    if i < 0:
+        return None
+    s = s[i:]
+    in_str = False
+    esc = False
+    stack = []
+    best_cut = None         # index just AFTER the last complete element
+    best_stack = None       # the open brackets at that point
+    for j, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            if stack:                      # closed a nested element, still inside a parent
+                best_cut, best_stack = j + 1, list(stack)
+        elif ch == "," and stack:
+            best_cut, best_stack = j, list(stack)   # drop the comma; close what's open here
+
+    if best_cut is None:
+        return None
+    candidate = s[:best_cut] + "".join(reversed(best_stack))
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
 
 
 def _verify_cites(obj, allowed: dict):
@@ -434,6 +507,10 @@ def build_draft(cfg, llm, query: str, results: list, run_id: str | None = None,
         "language": obj.get("language") or "en",
         "pattern": obj.get("pattern") or pattern,
         "pattern_counts": dict(counts),
+        # reply-file formatting — the draft rendered as an official reply
+        "subject": (obj.get("subject") or "").strip(),
+        "opening": (obj.get("opening") or "").strip(),
+        "closing": (obj.get("closing") or "").strip(),
         "parts": obj.get("parts") or [],
         "key_points": obj.get("key_points") or [],
         "gaps": obj.get("gaps") or [],

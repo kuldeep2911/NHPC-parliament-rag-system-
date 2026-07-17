@@ -52,10 +52,30 @@ def _enabled(cfg):
 # ---------------------------------------------------------------------------
 @router.get("/supporting/categories")
 def categories(request: Request, who=Depends(deps.require_user)):
-    cfg = _st(request)["cfg"]
+    cfg, conn = _st(request)["cfg"], _st(request)["conn"]
     _enabled(cfg)
     return {"categories": [{"slug": s, "label": l}
-                           for s, l in cfg.supporting_categories().items()]}
+                           for s, l in ingest.all_categories(cfg, conn).items()]}
+
+
+@router.post("/admin/supporting/categories")
+def create_category(request: Request, payload: dict = Body(...),
+                    admin=Depends(deps.require_admin)):
+    """Admin adds a category from the UI -- persisted in the DB, usable immediately, no
+    restart. slug is validated path-safe in ingest.create_category."""
+    cfg, conn = _st(request)["cfg"], _st(request)["conn"]
+    _enabled(cfg)
+    try:
+        cat = ingest.create_category(cfg, conn, payload.get("slug") or payload.get("label"),
+                                     payload.get("label") or "",
+                                     created_by=admin["email"])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    users.audit(conn, "supporting_category_created", success=True,
+                actor={"user_id": admin.get("db_user_id"), "email": admin["email"]},
+                reason=f"{cat['slug']} ({cat['label']})", ip=deps.client_ip(request),
+                user_agent=request.headers.get("user-agent"))
+    return {"ok": True, **cat}
 
 
 @router.get("/supporting")
@@ -64,7 +84,7 @@ def list_docs(request: Request, who=Depends(deps.require_user)):
     vintage. Available to any authenticated user -- officers select these into drafts."""
     cfg, conn = _st(request)["cfg"], _st(request)["conn"]
     _enabled(cfg)
-    labels = cfg.supporting_categories()
+    labels = ingest.all_categories(cfg, conn)
     with conn.cursor() as cur:
         cur.execute("""
             SELECT id, category, display_name, period_label, as_of_date, page_count,
@@ -107,9 +127,10 @@ async def upload(request: Request,
     _enabled(cfg)
 
     category = (category or "").strip().lower()
-    if category not in cfg.supporting_categories():
+    known = ingest.all_categories(cfg, conn)
+    if category not in known:
         raise HTTPException(400, {"message": f"unknown category {category!r}",
-                                  "detail": f"allowed: {list(cfg.supporting_categories())}"})
+                                  "detail": f"allowed: {list(known)}"})
 
     ip = deps.client_ip(request)
     ua = request.headers.get("user-agent")
@@ -160,7 +181,8 @@ async def upload(request: Request,
         proposed = {"as_of_date": None, "period_label": None}
         if cfg.supporting_llm_asof:
             proposed = ingest.propose_as_of(cfg, _get_llm(request),
-                                            parsed.get("document_text") or "")
+                                            parsed.get("document_text") or "",
+                                            tables=parsed.get("tables"))
         final_as_of = (as_of_date.strip() or proposed["as_of_date"]) or None
         final_period = (period_label.strip() or proposed["period_label"]) or None
 

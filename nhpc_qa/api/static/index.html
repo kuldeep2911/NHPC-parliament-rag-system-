@@ -329,6 +329,15 @@
            font:600 13px 'Inter', system-ui, sans-serif; color:var(--mut); cursor:pointer; }
   .uptab:hover { color:var(--ink2); }
   .uptab.on { color:var(--navy); border-bottom-color:var(--navy); }
+
+  /* draft rendered as an official reply file */
+  .replyfmt { background:#fcfcfb; border:1px solid var(--line2); border-left:3px solid var(--navy);
+              border-radius:0 8px 8px 0; padding:16px 18px; margin-bottom:8px; }
+  .reply-subject { font-size:14px; color:var(--ink); margin-bottom:10px; }
+  .reply-open { font-size:14px; color:var(--ink2); line-height:1.6; margin-bottom:10px; }
+  .reply-part { margin-bottom:12px; }
+  .reply-part .dtext { font-size:14px; color:var(--ink2); line-height:1.6; }
+  .reply-close { font-size:14px; color:var(--ink2); line-height:1.6; margin-top:8px; }
   .dkp { margin:0; padding-left:20px; }
   .dkp li { font-size:13.5px; color:var(--ink2); line-height:1.6; margin-bottom:7px; }
   .dgaps { margin:0; padding-left:20px; }
@@ -897,12 +906,17 @@ function renderDraft(D) {
             </div>`).join("")}
         </div>` : ""}
 
-      <h4 class="dh">Draft answer</h4>
-      ${(D.parts || []).map(p => `
-        <div class="dpart">
-          <div class="dtext">${p.label ? `<b>${esc(p.label)}</b> ` : ""}${esc(p.text)}</div>
-          ${cite(p.cites)}
-        </div>`).join("")}
+      <h4 class="dh">Draft reply <span class="dim">— in reply-file format</span></h4>
+      <div class="replyfmt">
+        ${D.subject ? `<div class="reply-subject"><b>Subject:</b> ${esc(D.subject)}</div>` : ""}
+        ${D.opening ? `<div class="reply-open">${esc(D.opening)}</div>` : ""}
+        ${(D.parts || []).map(p => `
+          <div class="reply-part">
+            <div class="dtext">${p.label ? `<b>${esc(p.label)}</b> ` : ""}${esc(p.text)}</div>
+            ${cite(p.cites)}
+          </div>`).join("")}
+        ${D.closing ? `<div class="reply-close">${esc(D.closing)}</div>` : ""}
+      </div>
 
       ${(D.key_points || []).length ? `
         <h4 class="dh">Key points the reply should cover</h4>
@@ -1145,6 +1159,24 @@ async function loadDocCategories() {
   } catch (e) { /* feature off */ }
 }
 
+async function addCategory() {
+  const label = prompt("New category name (e.g. \"Annual Reports\"):");
+  if (!label || !label.trim()) return;
+  try {
+    const r = await api("/admin/supporting/categories", { method: "POST", headers: headers(),
+      body: JSON.stringify({ label: label.trim() }) });
+    const d = await r.json();
+    // refresh the dropdown and select the new one
+    const sel = $("#sd_cat");
+    if (![...sel.options].some(o => o.value === d.slug)) {
+      const o = document.createElement("option"); o.value = d.slug; o.textContent = d.label;
+      sel.appendChild(o);
+    }
+    sel.value = d.slug;
+    SUPPORTING_CACHE = null;       // draft dropdown refreshes with the new category
+  } catch (e) { alert("Could not add category: " + e.message); }
+}
+
 async function loadDocList() {
   const el = $("#sd_list");
   if (!el) return;
@@ -1241,6 +1273,7 @@ $("#uploadBtn").onclick = () => {
       </div>
       <form id="sd_form" class="mform inline">
         <select class="gin" id="sd_cat" required><option value="">category…</option></select>
+        <button type="button" class="btn ghost small" id="sd_addcat" title="Add a new category">＋ category</button>
         <input class="gin" id="sd_name" type="text" placeholder="display name (optional)">
         <input class="gin" id="sd_period" type="text" placeholder="as-of / period (blank = auto)">
         <label class="btn ghost">Choose file…<input type="file" id="sd_file" hidden
@@ -1277,6 +1310,7 @@ $("#uploadBtn").onclick = () => {
     if (SD_FILE && !$("#sd_name").value) $("#sd_name").value = SD_FILE.name.replace(/\.[^.]+$/, "");
   };
   $("#sd_form").onsubmit = submitDoc;
+  $("#sd_addcat").onclick = addCategory;
 };
 
 // ── the source tree ───────────────────────────────────────────────────────

@@ -129,29 +129,45 @@ def parse_supporting_file(cfg, abs_path: str, provider=None) -> dict:
     }
 
 
-def propose_as_of(cfg, llm, document_text: str) -> dict:
+def propose_as_of(cfg, llm, document_text: str, tables=None) -> dict:
     """
     Ask the LLM for the document's as-of date and period label. The ADMIN confirms it before
     it is stored (see the upload route) -- this only PRE-FILLS the form.
 
+    ⚠️ READS THE TABLES TOO, not just document_text. ⚠️ These files are often SCANNED, so
+    document_text comes out empty or thin -- but the as-of date lives IN the table
+    ("Status as on 30.06.2026" in the header row, or fiscal-year column headers like
+    "2024-25 | 2023-24 | ..."). Reading only document_text is exactly why the first pass
+    produced a null / wrong period. So we feed the table renderings in as well.
+
     Returns {"as_of_date": "YYYY-MM-DD"|None, "period_label": str|None}. Never raises; on any
     failure returns nulls and the admin fills them in by hand (the field stays mandatory).
     """
-    if llm is None or not (document_text or "").strip():
+    # Build the context from BOTH the text and the tables.
+    ctx = (document_text or "").strip()
+    for t in (tables or []):
+        nl = (t.get("nl_rendering") or "").strip()
+        if nl:
+            ctx += "\n\nTABLE:\n" + nl
+    ctx = ctx.strip()
+    if llm is None or not ctx:
         return {"as_of_date": None, "period_label": None}
 
     system = (
         "You read NHPC internal reference documents (financial digests, project progress, "
-        "CSR) and report their reporting PERIOD. Return STRICT JSON only:\n"
+        "CSR) -- their text AND their tables -- and report the reporting PERIOD. Return "
+        "STRICT JSON only:\n"
         '{"as_of_date": "YYYY-MM-DD" or null, "period_label": "<short label>" or null}\n'
         "- as_of_date: a single 'as on'/'as at' date if the document states one "
-        "(e.g. 'Status as on 30.06.2026' -> 2026-06-30). null if there is none.\n"
+        "(e.g. a table titled 'Status as on 30.06.2026' -> 2026-06-30). null if none.\n"
         "- period_label: the human-readable reporting period. For a multi-year financial "
-        "table spanning several fiscal years, give the RANGE (e.g. 'FY 2020-21 to "
-        "2024-25'). For a status snapshot, echo it ('as on 30.06.2026').\n"
+        "table whose columns are fiscal years (e.g. '2024-25 | 2023-24 | 2022-23 | 2021-22 "
+        "| 2020-21'), give the RANGE from the NEWEST to the OLDEST year present "
+        "('FY 2020-21 to 2024-25'). For a status snapshot, echo it ('as on 30.06.2026').\n"
+        "- The date/period is often in a TABLE HEADER, not the prose. Read the tables.\n"
         "- Report the DOCUMENT'S period, never today's date. If unclear, use null.")
     try:
-        raw = llm.complete_text(system, f"DOCUMENT:\n{document_text[:6000]}",
+        raw = llm.complete_text(system, f"DOCUMENT:\n{ctx[:8000]}",
                                 max_tokens=200, temperature=0.0)
     except Exception as e:      # noqa: BLE001 -- the admin can always type it
         log.warning("propose_as_of: llm failed (%s) — admin will enter it", type(e).__name__)
@@ -171,11 +187,56 @@ def make_doc_key(category: str, sha256: str) -> str:
     return f"{category}/{sha256[:16]}"
 
 
-def category_of_path(cfg, abs_path: str):
+def all_categories(cfg, conn) -> dict:
+    """
+    {slug: label} = the env registry PLUS admin-created categories from the DB. The env
+    ones come first (stable order); a DB category with the same slug does not override the
+    env label. This is THE source of truth for 'what categories exist' at runtime, so a
+    category added in the UI is usable immediately, no restart.
+    """
+    cats = dict(cfg.supporting_categories())
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT slug, label FROM supporting_categories ORDER BY created_at")
+            for slug, label in cur.fetchall():
+                cats.setdefault(slug, label)
+    except Exception as e:      # noqa: BLE001 -- a missing table pre-migration is not fatal
+        log.debug("all_categories: DB read skipped (%s)", type(e).__name__)
+    return cats
+
+
+def create_category(cfg, conn, slug: str, label: str, created_by=None) -> dict:
+    """
+    Add a category. slug becomes a folder name and a DB category value, so it must be
+    path-safe -- validated here, not trusted from the client. Idempotent: re-adding an
+    existing slug just returns it. Creates the folder so a straight file-drop works at once.
+    """
+    slug = (slug or "").strip().lower().replace(" ", "_")
+    if not slug or not slug.replace("_", "").isalnum():
+        raise ValueError("category id must be letters, digits and underscores only")
+    label = (label or "").strip() or slug.replace("_", " ").title()
+
+    existing = all_categories(cfg, conn)
+    if slug not in existing:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO supporting_categories (slug, label, created_by)
+                           VALUES (%s,%s,%s) ON CONFLICT (slug) DO NOTHING""",
+                        (slug, label, created_by))
+        conn.commit()
+    # create the folder now, so a file dropped into it is picked up immediately
+    os.makedirs(os.path.join(cfg.supporting_root_abs(), slug), exist_ok=True)
+    log.info("supporting: category %r (%s) available", slug, label)
+    return {"slug": slug, "label": all_categories(cfg, conn).get(slug, label)}
+
+
+def category_of_path(cfg, abs_path: str, conn=None):
     """
     The category for a file already sitting in the supporting root, from its folder:
     <root>/<category>/<file>. Returns None if it is not directly under a known category
     (e.g. a stray file at the root, or a staging file).
+
+    Checks the MERGED set (env + admin-created) when a conn is available, so a file dropped
+    into an admin-created category folder is ingested, not ignored.
     """
     root = os.path.abspath(cfg.supporting_root_abs())
     p = os.path.abspath(abs_path)
@@ -187,7 +248,8 @@ def category_of_path(cfg, abs_path: str):
     if len(parts) < 2 or parts[0].startswith(".."):
         return None
     cat = parts[0].lower()
-    return cat if cat in cfg.supporting_categories() else None
+    known = all_categories(cfg, conn) if conn is not None else cfg.supporting_categories()
+    return cat if cat in known else None
 
 
 def ingest_path(cfg, conn, abs_path: str, *, uploaded_by="watcher", provider=None,
@@ -202,7 +264,7 @@ def ingest_path(cfg, conn, abs_path: str, *, uploaded_by="watcher", provider=Non
     soft-deleted row). Returns (doc_id, doc_key) or (None, None) if the file is not under a
     known category.
     """
-    category = category_of_path(cfg, abs_path)
+    category = category_of_path(cfg, abs_path, conn=conn)
     if category is None:
         log.warning("supporting: %s is not under a known category folder — ignored",
                     abs_path)
@@ -215,7 +277,8 @@ def ingest_path(cfg, conn, abs_path: str, *, uploaded_by="watcher", provider=Non
 
     proposed = {"as_of_date": None, "period_label": None}
     if getattr(cfg, "supporting_llm_asof", False):
-        proposed = propose_as_of(cfg, llm, parsed.get("document_text") or "")
+        proposed = propose_as_of(cfg, llm, parsed.get("document_text") or "",
+                                  tables=parsed.get("tables"))
 
     doc_id = store(conn, cfg, category=category,
                    display_name=os.path.splitext(os.path.basename(abs_path))[0],

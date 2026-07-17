@@ -104,45 +104,64 @@ def build_docx(query: str, draft: dict, *, user_email: str | None = None,
     normal.font.size = Pt(11)
     normal.element.rPr.rFonts.set(qn("w:cs"), _DEVA)
 
-    # ---- title + the notice, unmissable --------------------------------
-    _para(doc, "NHPC — Parliamentary Reply", size=17, bold=True, color=_NAVY, space_after=2)
-    _para(doc, "Draft assistance", size=11, color=_GREY, space_after=10)
-
+    # ---- the DRAFT notice, unmissable ----------------------------------
     banner = doc.add_paragraph()
-    banner.paragraph_format.space_after = Pt(12)
+    banner.paragraph_format.space_after = Pt(10)
     _font(banner.add_run("⚠ " + NOTICE), size=10, bold=True, color=_RED)
 
-    _rule(doc)
+    # ═══ THE REPLY, in reply-file format ═══
+    # This is the part the officer files: subject line, standard opening, point-wise answer,
+    # closing -- matching how the past replies are written. The review material (key points,
+    # gaps, contradictions, sources) follows below a separator, not mixed into the reply.
+    subject = (draft.get("subject") or "").strip()
+    opening = (draft.get("opening") or "").strip()
+    closing = (draft.get("closing") or "").strip()
 
-    # ---- the question ---------------------------------------------------
-    _heading(doc, "QUESTION")
-    _para(doc, query or "(none)", size=11, space_after=12)
+    if subject:
+        p = _para(doc, "", space_after=8)
+        _font(p.add_run("Subject: "), size=11, bold=True)
+        _font(p.add_run(subject), size=11, hindi=_is_hindi(subject))
+    else:
+        _para(doc, query or "", size=11, bold=True, space_after=8)
 
-    # ---- the draft ------------------------------------------------------
-    _heading(doc, "DRAFT ANSWER")
+    if opening:
+        _para(doc, opening, size=11, space_after=8)
+
     parts = draft.get("parts") or []
-    if not parts:
+    if not parts and not opening:
         _para(doc, "(no draft was produced)", italic=True, color=_GREY)
     for p in parts:
         label = (p.get("label") or "").strip()
         text = (p.get("text") or "").strip()
         para = doc.add_paragraph()
-        para.paragraph_format.space_after = Pt(3)
+        para.paragraph_format.space_after = Pt(7)
+        para.paragraph_format.left_indent = Pt(6)
         if label:
             _font(para.add_run(f"{label} "), size=11, bold=True)
         _font(para.add_run(text), size=11, hindi=_is_hindi(text))
 
-        cites = p.get("cites") or []
-        cp = doc.add_paragraph()
-        cp.paragraph_format.space_after = Pt(10)
-        cp.paragraph_format.left_indent = Pt(18)
-        if cites:
-            _font(cp.add_run("Source: " + "; ".join(cites)), size=8.5, italic=True,
-                  color=_GREY)
-        else:
-            # An uncited point is NOT quietly presented as if it were sourced.
-            _font(cp.add_run("⚠ UNCITED — no past reply supports this. Verify before use."),
-                  size=8.5, bold=True, color=_RED)
+    if closing:
+        _para(doc, closing, size=11, space_after=10)
+
+    _rule(doc)
+    _para(doc, "REVIEW ANNEXURE — not part of the reply. Verify each point against its "
+               "source before filing.", size=9, italic=True, color=_GREY, space_after=10)
+
+    # per-part citations, for review
+    if parts:
+        _heading(doc, "CITATIONS PER POINT")
+        for p in parts:
+            label = (p.get("label") or "").strip()
+            cites = p.get("cites") or []
+            cp = doc.add_paragraph(style="List Bullet")
+            cp.paragraph_format.space_after = Pt(2)
+            _font(cp.add_run(f"{label or '—'}: "), size=9.5, bold=True)
+            if cites:
+                _font(cp.add_run("; ".join(cites)), size=9.5, color=_GREY)
+            else:
+                _font(cp.add_run("⚠ UNCITED — no source supports this. Verify before use."),
+                      size=9.5, bold=True, color=_RED)
+        _para(doc, "", space_after=6)
 
     # ---- key points -----------------------------------------------------
     kps = draft.get("key_points") or []
