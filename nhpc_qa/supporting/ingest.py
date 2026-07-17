@@ -273,6 +273,25 @@ def ingest_path(cfg, conn, abs_path: str, *, uploaded_by="watcher", provider=Non
     root = os.path.abspath(cfg.supporting_root_abs())
     rel_path = os.path.relpath(os.path.abspath(abs_path), root).replace("\\", "/")
     sha = sha256_of(abs_path)
+    on_disk = os.path.basename(abs_path)
+
+    # THE REAL NAME. Files are content-addressed on disk (<sha16>.pdf), so the on-disk
+    # basename is a hash, NOT a name a human uploaded. When this exact file is already in
+    # the DB (a re-ingest, or the upload endpoint stored it first), keep the real
+    # original_filename/display_name already recorded rather than overwriting them with the
+    # hash. Only a file DROPPED straight into the folder by hand -- whose on-disk name IS
+    # the real name -- falls back to the basename.
+    doc_key = make_doc_key(category, sha)
+    orig_name = on_disk
+    disp_name = os.path.splitext(on_disk)[0]
+    with conn.cursor() as cur:
+        cur.execute("""SELECT original_filename, display_name FROM supporting_documents
+                       WHERE doc_key = %s""", (doc_key,))
+        row = cur.fetchone()
+    if row:
+        orig_name = row[0] or orig_name
+        disp_name = row[1] or disp_name
+
     parsed = parse_supporting_file(cfg, abs_path, provider=provider)
 
     proposed = {"as_of_date": None, "period_label": None}
@@ -281,12 +300,12 @@ def ingest_path(cfg, conn, abs_path: str, *, uploaded_by="watcher", provider=Non
                                   tables=parsed.get("tables"))
 
     doc_id = store(conn, cfg, category=category,
-                   display_name=os.path.splitext(os.path.basename(abs_path))[0],
-                   file_path=rel_path, original_filename=os.path.basename(abs_path),
+                   display_name=disp_name,
+                   file_path=rel_path, original_filename=orig_name,
                    sha256=sha, parsed=parsed,
                    as_of_date=proposed["as_of_date"], period_label=proposed["period_label"],
                    uploaded_by=uploaded_by)
-    return doc_id, make_doc_key(category, sha)
+    return doc_id, doc_key
 
 
 def soft_delete_path(cfg, conn, abs_path: str):
