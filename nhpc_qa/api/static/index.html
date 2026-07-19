@@ -307,6 +307,49 @@
   .promptbox { width:100%; font:13.5px 'Inter', system-ui, sans-serif; padding:9px 12px;
                border:1.5px solid #d7d4ce; border-radius:8px; resize:vertical; }
 
+  /* per-category file picker: a row with an "add file" dropdown + selected chips.
+     Replaces the flat checkbox list so 20-30 files stay manageable. */
+  .catpick { border:1px solid var(--line); border-radius:9px; padding:10px 12px;
+             margin-bottom:8px; }
+  .catpick-h { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .catpick-name { font-size:11px; font-weight:700; text-transform:uppercase;
+                  letter-spacing:.04em; color:#8a8f96; }
+  .catpick-count { font-size:11px; color:var(--mut2); }
+  /* the add-file control: a <details> acting as a dropdown so we get click-to-open,
+     type-to-filter, and single/multiple picks without a component library */
+  .addfile { position:relative; }
+  .addfile > summary { list-style:none; cursor:pointer; display:inline-flex;
+                       align-items:center; gap:6px; font:600 12px 'Inter', system-ui, sans-serif;
+                       color:var(--navy); background:#eef2f7; border:1px solid #d6e0ec;
+                       border-radius:7px; padding:5px 10px; user-select:none; }
+  .addfile > summary::-webkit-details-marker { display:none; }
+  .addfile[open] > summary { background:#e2eaf4; }
+  .addfile-pop { position:absolute; z-index:30; top:calc(100% + 4px); right:0; width:320px;
+                 max-width:78vw; background:#fff; border:1px solid var(--line);
+                 border-radius:10px; box-shadow:0 8px 26px rgba(20,30,50,.14); padding:8px; }
+  .addfile-search { width:100%; font:13px 'Inter', system-ui, sans-serif; padding:7px 10px;
+                    border:1.5px solid #d7d4ce; border-radius:7px; margin-bottom:6px; }
+  .addfile-list { max-height:230px; overflow:auto; }
+  .addfile-opt { display:flex; align-items:baseline; gap:8px; padding:7px 9px;
+                 border-radius:6px; cursor:pointer; font-size:13px; }
+  .addfile-opt:hover { background:#faf9f7; }
+  .addfile-opt.on { background:#eef5f0; }
+  .addfile-opt .tick { width:12px; color:#2f6b45; font-weight:700; }
+  .addfile-opt .nm { flex:1; min-width:0; color:var(--ink2); overflow:hidden;
+                     text-overflow:ellipsis; white-space:nowrap; }
+  .addfile-opt .pd { font-size:11px; color:var(--mut2); white-space:nowrap; }
+  .addfile-empty { padding:10px; font-size:12px; color:var(--mut2); text-align:center; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .chip { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--ink2);
+          background:#eef5f0; border:1px solid #cfe3d6; border-radius:14px; padding:3px 6px 3px 10px; }
+  .chip .rm { border:0; background:none; cursor:pointer; color:#5c6b60; font-size:14px;
+              line-height:1; padding:0 2px; border-radius:50%; }
+  .chip .rm:hover { color:#9a3b32; }
+  .chips-none { font-size:12px; color:var(--mut2); font-style:italic; margin-top:6px; }
+  .composer-foot { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+                   margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+  .composer-foot .dim { flex:1; min-width:180px; }
+
   /* contradictions — the core value, surfaced not smoothed */
   .contrabox { background:#fdf0ef; border:1px solid #f0cfcb; border-radius:9px;
                padding:14px 16px; margin:8px 0 18px; }
@@ -599,8 +642,7 @@ function render(d) {
     + `<div class="disclaimer">Scores below are heuristics for triage, not a guarantee of correctness.</div>`
     + (n
        ? `<div class="draftbar">
-            <button class="btn" id="draftGo">✎ Generate draft reply</button>
-            <button class="btn ghost" id="draftOpts" aria-expanded="false">＋ Reference documents &amp; prompt</button>
+            <button class="btn" id="draftGo" aria-expanded="false">✎ Generate draft reply</button>
             <span class="dim">Builds a cited draft from these past replies. You review it —
               it is never an approved answer.</span>
           </div>
@@ -624,9 +666,12 @@ function render(d) {
   // an LLM — most searches are "has this been asked before?", and drafting every one of
   // them would burn a model call on a draft nobody reads.
   SUPPORTING_SELECTED.clear();
+  DRAFT_PROMPT = "";
   setTimeout(() => {
-    const b = $("#draftGo"); if (b) b.onclick = () => generateDraft();
-    const o = $("#draftOpts"); if (o) o.onclick = () => toggleDraftOpts();
+    // Clicking "Generate draft reply" no longer drafts immediately — it opens the composer
+    // (attach reference files + prompt) first, so the officer is prompted to attach before a
+    // draft is built. A "Generate now" button INSIDE the panel runs the actual draft.
+    const b = $("#draftGo"); if (b) b.onclick = () => openDraftComposer();
   }, 0);
 
   $("#out").innerHTML = '<div class="cards">' + d.results.map(r => {
@@ -770,11 +815,14 @@ function closePast() { $("#pastPanel").hidden = true;  $("#recent").setAttribute
 const SUPPORTING_SELECTED = new Set();
 let SUPPORTING_CACHE = null;          // the doc list, fetched once per session
 
-async function toggleDraftOpts() {
-  const el = $("#draftPanelOpts"), btn = $("#draftOpts");
+// Open (or toggle) the draft composer: the panel where the officer attaches reference
+// files + a prompt BEFORE the draft is generated. Called by "Generate draft reply".
+async function openDraftComposer() {
+  const el = $("#draftPanelOpts"), btn = $("#draftGo");
   if (!el) return;
-  if (!el.hidden) { el.hidden = true; btn.setAttribute("aria-expanded", "false"); return; }
-  el.hidden = false; btn.setAttribute("aria-expanded", "true");
+  // second click on the header button closes the composer again
+  if (!el.hidden) { el.hidden = true; if (btn) btn.setAttribute("aria-expanded", "false"); return; }
+  el.hidden = false; if (btn) btn.setAttribute("aria-expanded", "true");
   el.innerHTML = `<div class="draftopts"><div class="mnote">Loading reference documents…</div></div>`;
 
   if (SUPPORTING_CACHE === null) {
@@ -782,48 +830,146 @@ async function toggleDraftOpts() {
     catch (e) { SUPPORTING_CACHE = []; }   // feature off or unreachable -> prompt box only
   }
   drawDraftOpts();
+  el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// A doc's period label, for the dropdown option and the chip.
+function docPeriod(d) {
+  return d.period_label || (d.as_of_date ? "as on " + d.as_of_date : "period unknown");
 }
 
 function drawDraftOpts() {
   const el = $("#draftPanelOpts");
   const docs = SUPPORTING_CACHE || [];
-  // group by category, preserving the server's order
+  // group by category, preserving the server's order. Keyed by the category id so the
+  // per-category dropdowns are stable; the label is carried for display.
   const groups = {};
-  for (const d of docs) (groups[d.category_label] ||= []).push(d);
+  for (const d of docs) {
+    (groups[d.category] ||= { label: d.category_label || d.category, list: [] }).list.push(d);
+  }
 
-  const docHtml = docs.length ? Object.entries(groups).map(([cat, list]) => `
-    <div class="doccat"><div class="doccat-h">${esc(cat)}</div>
-      ${list.map(d => `
-        <label class="docrow ${SUPPORTING_SELECTED.has(d.id) ? "on" : ""}">
-          <input type="checkbox" data-sid="${d.id}" ${SUPPORTING_SELECTED.has(d.id) ? "checked" : ""}>
-          <span class="docname">${esc(d.display_name)}</span>
-          <span class="docperiod">${esc(d.period_label || (d.as_of_date ? "as on " + d.as_of_date : "period unknown"))}</span>
-          ${d.needs_review ? '<span class="pill" title="a parsing warning, not a correctness gate">flagged</span>' : ""}
-        </label>`).join("")}
-    </div>`).join("")
+  // Each category is a row: an "＋ add file" dropdown listing ONLY that category's files
+  // (searchable, single or multiple), with the picked files shown as removable chips below.
+  // This replaces the flat checkbox list, which did not scale past a handful of files.
+  const catHtml = docs.length ? Object.entries(groups).map(([cid, g]) => {
+    const total = g.list.length;
+    return `
+    <div class="catpick" data-cat="${esc(cid)}">
+      <div class="catpick-h">
+        <span class="catpick-name">${esc(g.label)}</span>
+        <details class="addfile">
+          <summary>＋ add file <span class="catpick-count" data-count="${esc(cid)}"></span></summary>
+          <div class="addfile-pop">
+            <input class="addfile-search" type="text" placeholder="Filter ${total} file${total===1?"":"s"}…"
+                   data-search="${esc(cid)}" autocomplete="off">
+            <div class="addfile-list" data-list="${esc(cid)}"></div>
+          </div>
+        </details>
+      </div>
+      <div class="chips" data-chips="${esc(cid)}"></div>
+    </div>`;
+  }).join("")
     : `<div class="mnote">No reference documents have been uploaded yet.${ME && ME.role === "admin"
         ? ` Use <b>Documents</b> in the header to add some.` : ""}</div>`;
 
   el.innerHTML = `
     <div class="draftopts">
-      <div class="opts-h">Reference documents <span class="dim">— optional. Their current
-        figures are added to the draft, each cited with its as-of date. Q&amp;A search is
-        unaffected.</span></div>
-      ${docHtml}
+      <div class="opts-h">Reference documents <span class="dim">— optional. Pick file(s)
+        per category; their current figures are added to the draft, each cited with its as-of
+        date. Q&amp;A search is unaffected.</span></div>
+      ${catHtml}
       <div class="opts-h" style="margin-top:14px;">Prompt <span class="dim">— optional
         guidance (e.g. “use the financial report for the cost figures”). It steers emphasis;
         it cannot override the grounding rules.</span></div>
       <textarea id="draftPrompt" class="promptbox" rows="2"
         placeholder="Optional guidance for the draft…">${esc(DRAFT_PROMPT)}</textarea>
+      <div class="composer-foot">
+        <button class="btn" id="draftRun">✎ Generate now</button>
+        <span class="dim" id="draftRunHint"></span>
+      </div>
     </div>`;
 
-  el.querySelectorAll("input[data-sid]").forEach(cb => cb.onchange = () => {
-    const id = +cb.dataset.sid;
-    cb.checked ? SUPPORTING_SELECTED.add(id) : SUPPORTING_SELECTED.delete(id);
-    cb.closest(".docrow").classList.toggle("on", cb.checked);
+  // wire each category's dropdown list + search, and render its current chips
+  Object.entries(groups).forEach(([cid, g]) => {
+    renderCatOptions(cid, g.list, "");
+    renderCatChips(cid, g.list);
+    const search = el.querySelector(`[data-search="${cssq(cid)}"]`);
+    if (search) search.oninput = () => renderCatOptions(cid, g.list, search.value);
   });
+
   const pb = $("#draftPrompt");
-  if (pb) pb.oninput = () => { DRAFT_PROMPT = pb.value; };
+  if (pb) pb.oninput = () => { DRAFT_PROMPT = pb.value; updateComposerHint(); };
+  const run = $("#draftRun");
+  if (run) run.onclick = () => generateDraft();
+  updateComposerHint();
+}
+
+// A soft nudge under the "Generate now" button — reflects what is attached, but never blocks:
+// a Q&A-only draft (no files, no prompt) is still allowed.
+function updateComposerHint() {
+  const hint = $("#draftRunHint");
+  if (!hint) return;
+  const n = SUPPORTING_SELECTED.size;
+  const hasPrompt = !!(DRAFT_PROMPT || "").trim();
+  if (n === 0 && !hasPrompt) {
+    hint.textContent = "No file or prompt attached — the draft will use the past replies above only.";
+  } else {
+    const parts = [];
+    if (n) parts.push(`${n} file${n === 1 ? "" : "s"} attached`);
+    if (hasPrompt) parts.push("prompt added");
+    hint.textContent = parts.join(" · ");
+  }
+}
+
+// CSS.escape may be absent in very old engines; fall back to a safe attribute-selector value.
+function cssq(s) { return (window.CSS && CSS.escape) ? CSS.escape(String(s)) : String(s).replace(/["\\]/g, "\\$&"); }
+
+// Render the filtered option list inside one category's dropdown. Clicking an option toggles
+// selection in place (the dropdown stays open, so several files can be picked in one go).
+function renderCatOptions(cid, list, filter) {
+  const box = document.querySelector(`[data-list="${cssq(cid)}"]`);
+  if (!box) return;
+  const f = (filter || "").trim().toLowerCase();
+  const shown = f ? list.filter(d => (d.display_name || "").toLowerCase().includes(f)) : list;
+  box.innerHTML = shown.length ? shown.map(d => {
+    const on = SUPPORTING_SELECTED.has(d.id);
+    return `<div class="addfile-opt ${on ? "on" : ""}" data-sid="${d.id}">
+      <span class="tick">${on ? "✓" : ""}</span>
+      <span class="nm" title="${esc(d.display_name)}">${esc(d.display_name)}</span>
+      <span class="pd">${esc(docPeriod(d))}</span>
+    </div>`;
+  }).join("") : `<div class="addfile-empty">No file matches “${esc(filter)}”.</div>`;
+  box.querySelectorAll(".addfile-opt").forEach(opt => opt.onclick = () => {
+    const id = +opt.dataset.sid;
+    if (SUPPORTING_SELECTED.has(id)) SUPPORTING_SELECTED.delete(id);
+    else SUPPORTING_SELECTED.add(id);
+    opt.classList.toggle("on", SUPPORTING_SELECTED.has(id));
+    opt.querySelector(".tick").textContent = SUPPORTING_SELECTED.has(id) ? "✓" : "";
+    renderCatChips(cid, list);
+  });
+}
+
+// The chips beneath a category = the files chosen from it, each removable.
+function renderCatChips(cid, list) {
+  const box = document.querySelector(`[data-chips="${cssq(cid)}"]`);
+  const cnt = document.querySelector(`[data-count="${cssq(cid)}"]`);
+  if (!box) return;
+  const chosen = list.filter(d => SUPPORTING_SELECTED.has(d.id));
+  if (cnt) cnt.textContent = chosen.length ? `· ${chosen.length}` : "";
+  box.innerHTML = chosen.length ? chosen.map(d => `
+    <span class="chip" title="${esc(docPeriod(d))}">
+      ${esc(d.display_name)}
+      <button class="rm" data-sid="${d.id}" aria-label="remove ${esc(d.display_name)}">×</button>
+    </span>`).join("")
+    : `<span class="chips-none">No file selected from this category.</span>`;
+  box.querySelectorAll(".rm").forEach(b => b.onclick = () => {
+    SUPPORTING_SELECTED.delete(+b.dataset.sid);
+    renderCatChips(cid, list);
+    // reflect the removal in the (possibly open) dropdown too
+    const opt = document.querySelector(`[data-list="${cssq(cid)}"] .addfile-opt[data-sid="${b.dataset.sid}"]`);
+    if (opt) { opt.classList.remove("on"); const t = opt.querySelector(".tick"); if (t) t.textContent = ""; }
+  });
+  updateComposerHint();
 }
 let DRAFT_PROMPT = "";
 
@@ -831,11 +977,16 @@ let DRAFT_PROMPT = "";
 // the browser never gets to choose what the model is grounded in — it re-reads the exact
 // results the officer was shown. Selected reference-doc IDs + the prompt ride along.
 async function generateDraft() {
-  const btn = $("#draftGo"), box = $("#draftbox");
+  // Triggered by "Generate now" inside the composer. Fall back to the header button if the
+  // composer is somehow not mounted.
+  const btn = $("#draftRun") || $("#draftGo"), box = $("#draftbox");
   if (!RUN_ID || !btn || !box) return;
   btn.disabled = true;
   const label = btn.textContent;
   btn.textContent = "drafting…";
+  // Collapse the composer so the draft reads cleanly; the officer's picks are kept in state.
+  const panel = $("#draftPanelOpts");
+  if (panel) { panel.hidden = true; const h = $("#draftGo"); if (h) h.setAttribute("aria-expanded", "false"); }
   const nSel = SUPPORTING_SELECTED.size;
   box.innerHTML = `<div class="draftpanel"><div class="mnote">Reading the past replies${
     nSel ? ` and ${nSel} reference document${nSel === 1 ? "" : "s"}` : ""} and drafting…
