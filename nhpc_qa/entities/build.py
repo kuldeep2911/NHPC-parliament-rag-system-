@@ -83,6 +83,32 @@ def seed_projects(conn) -> int:
     return n
 
 
+def seed_synonyms(conn) -> int:
+    """
+    Load the curated context-synonym groups. Each member (except the representative) is
+    rewritten to the representative at query time. Idempotent on the normalised phrase.
+    """
+    from nhpc_qa.entities import synonyms
+    n = 0
+    with conn.cursor() as cur:
+        for group in synonyms.SYNONYM_GROUPS:
+            if not group:
+                continue
+            canon = group[0]
+            cid = D.canonical_id(canon)
+            for phrase in group:
+                cur.execute("""
+                    INSERT INTO concept_synonyms (phrase_norm, canonical, concept_id, source)
+                    VALUES (%s,%s,%s,'seed')
+                    ON CONFLICT (phrase_norm) DO UPDATE SET
+                        canonical = EXCLUDED.canonical, concept_id = EXCLUDED.concept_id
+                """, (D.normalise(phrase), canon, cid))
+                n += cur.rowcount
+    conn.commit()
+    log.info("seeded %d synonym phrase(s)", n)
+    return n
+
+
 def mine_abbreviations(conn) -> int:
     """
     Mine "Full Name (ABBR)" from every question + answer. Adds the ABBR as an alias of the
@@ -209,6 +235,77 @@ def _parse_entities(raw):
     return out
 
 
+_SYN_SYSTEM = """You build a domain synonym dictionary for Indian parliamentary Q&A about
+NHPC hydropower. Given text, propose groups of phrases that are INTERCHANGEABLE in this
+domain -- a reply using one could use another with no change of meaning.
+
+Examples of valid groups:
+  ["under construction", "ongoing", "under execution"]
+  ["commissioned", "completed", "operational"]
+  ["sanctioned", "approved"]
+
+Rules:
+- ONLY genuinely interchangeable phrases. If two phrases could change the answer, do NOT
+  group them (e.g. "under construction" and "commissioned" are NOT synonyms -- different
+  status). Be conservative; a wrong synonym silently corrupts results.
+- The FIRST phrase in each group is the most standard/common wording.
+- Lowercase. Return STRICT JSON: [["phrase a","phrase b",...], ...]. No prose."""
+
+
+def llm_discover_synonyms(conn, cfg, llm) -> int:
+    """
+    Ask the LLM for domain synonym groups over the corpus vocabulary. Added flagged
+    (needs_review, source=llm) -- USABLE but marked, because a wrong synonym is higher risk
+    than a wrong entity alias. Never groups a phrase already owned by a seed group.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""SELECT string_agg(DISTINCT left(question_text,300), ' | ')
+                       FROM sub_questions
+                       TABLESAMPLE SYSTEM (30)""")   # a sample is enough for vocabulary
+        sample = cur.fetchone()[0] or ""
+        cur.execute("SELECT phrase_norm FROM concept_synonyms")
+        owned = {r[0] for r in cur.fetchall()}
+
+    if not sample.strip():
+        return 0
+    try:
+        raw = llm.complete_text(_SYN_SYSTEM, sample[:8000], max_tokens=800, temperature=0.0)
+    except Exception as e:      # noqa: BLE001
+        log.warning("llm_discover_synonyms: %s", type(e).__name__)
+        return 0
+
+    s = (raw or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s, flags=re.S)
+    m = re.search(r"\[.*\]", s, re.S)
+    try:
+        groups = json.loads(m.group(0) if m else s)
+    except (json.JSONDecodeError, AttributeError):
+        return 0
+
+    added = 0
+    with conn.cursor() as cur:
+        for group in groups if isinstance(groups, list) else []:
+            if not isinstance(group, list) or len(group) < 2:
+                continue
+            canon = str(group[0]).strip().lower()
+            if not canon:
+                continue
+            cid = D.canonical_id(canon)
+            for phrase in group:
+                pn = D.normalise(phrase)
+                if not pn or pn in owned:      # never override a seed group
+                    continue
+                cur.execute("""INSERT INTO concept_synonyms
+                                 (phrase_norm, canonical, concept_id, source, needs_review)
+                               VALUES (%s,%s,%s,'llm',true)
+                               ON CONFLICT (phrase_norm) DO NOTHING""", (pn, canon, cid))
+                added += cur.rowcount
+    conn.commit()
+    log.info("llm synonym discovery: +%d phrase(s) (flagged for review)", added)
+    return added
+
+
 # ---------------------------------------------------------------------------
 # EXTRACT — deterministic per-record entities against the current dictionary
 # ---------------------------------------------------------------------------
@@ -267,13 +364,18 @@ def build(cfg, conn, *, use_llm=False, only=None, extract_only=False):
         if not only:                          # seeds are corpus-wide, not per-file
             seed_states(conn)
             seed_projects(conn)
+            seed_synonyms(conn)               # context-synonym groups (query expansion)
             mine_abbreviations(conn)
         else:
-            # an upload only mines its own new text for abbreviations
+            # an upload only mines its own new text for abbreviations; the curated synonym
+            # seed is corpus-wide and already loaded.
             mine_abbreviations(conn)
         if use_llm:
             from nhpc_qa.core.providers import get_llm
-            llm_discover(conn, cfg, get_llm(cfg), only=only)
+            llm = get_llm(cfg)
+            llm_discover(conn, cfg, llm, only=only)
+            if not only:
+                llm_discover_synonyms(conn, cfg, llm)
 
     # ALWAYS extract (dictionary first, then extract -> records retrievable)
     links = extract_records(conn, only=only)

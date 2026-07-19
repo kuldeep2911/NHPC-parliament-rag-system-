@@ -63,10 +63,20 @@ def query_process(state, deps):
     #      embeds only 0.63 like "Himachal Pradesh"), and the final SETS diverged. Measured.
     # It is deterministic (dictionary lookup, no LLM) and never filters by language.
     from nhpc_qa.entities import dictionary as _edict
-    matched = _edict.match_entities(q, deps.get("alias_map") or {})
+
+    # STEP 1: context-synonym expansion. "ongoing hydro projects" -> "under construction
+    # hydro projects" (and other domain synonyms), so two phrasings of the SAME question
+    # become the SAME string and therefore embed and rerank IDENTICALLY -> same results. The
+    # embedding model already reads them as ~0.91 similar; this closes the last gap
+    # deterministically. Applied FIRST, so entity matching + embedding both see the
+    # normalised text.
+    q_syn = _edict.apply_synonyms(q, deps.get("synonym_map") or {})
+
+    # STEP 2: entity canonicalisation. "HP" -> "Himachal Pradesh".
+    matched = _edict.match_entities(q_syn, deps.get("alias_map") or {})
     entity_ids = [m["entity_id"] for m in matched]
     entities = [m["canonical"] for m in matched]
-    q_canon = _edict.canonicalise_text(q, matched)
+    q_canon = _edict.canonicalise_text(q_syn, matched)
 
     query_vec = deps["embedder"].embed_queries([q_canon])[0]
 
@@ -260,7 +270,13 @@ def verify(state, deps):
                             type(e).__name__)
                 llm = None
         if llm is not None:
-            kept, meta = V.llm_verify(cfg, llm, state["query"], kept)
+            # Verify against the CANONICALISED query (synonyms + entities normalised), so two
+            # phrasings of the same question are verified as the SAME query -- otherwise the
+            # verify pass, judging "ongoing" and "under construction" separately, could keep
+            # different candidates even though retrieval was identical. This is what makes
+            # synonym pairs return the same FINAL set, not just the same reranked set.
+            verify_q = state.get("query_canon") or state["query"]
+            kept, meta = V.llm_verify(cfg, llm, verify_q, kept, conn=deps.get("conn"))
             verify_meta.update(meta)
         else:
             verify_meta.update({"unavailable": True, "reason": "no LLM configured"})

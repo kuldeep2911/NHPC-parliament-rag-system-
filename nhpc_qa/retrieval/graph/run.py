@@ -48,6 +48,7 @@ def query_engine(cfg=None):
             "reranker": get_reranker(cfg) if cfg.rerank_enabled else None,
             "entity_vocab": entity.load_vocabulary(conn),
             "alias_map": __import__("nhpc_qa.entities.dictionary", fromlist=["load_alias_map"]).load_alias_map(conn),
+            "synonym_map": __import__("nhpc_qa.entities.dictionary", fromlist=["load_synonym_map"]).load_synonym_map(conn),
             "llm": None,          # built lazily only if generation is enabled
             # Langfuse mirror: a no-op unless LANGFUSE_ENABLED (SDK never imported when off)
             "tracer": QueryTracer(cfg),

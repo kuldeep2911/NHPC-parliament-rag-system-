@@ -88,7 +88,7 @@ class Phase4Config(Phase3Config):
     # MODEL-SPECIFIC. Calibrated for llama-nemotron-rerank-1b-v2. A different reranker emits
     # logits on a different scale -- re-run the calibration before trusting this value.
     similarity_threshold: float = field(
-        default_factory=lambda: _env_float("SIMILARITY_THRESHOLD", 0.6))
+        default_factory=lambda: _env_float("SIMILARITY_THRESHOLD", 0.1))
 
     # A bound on pathological cases, NOT a relevance cap. The relevance decision is the
     # sigmoid filter + the LLM; this only stops a degenerate query returning hundreds.

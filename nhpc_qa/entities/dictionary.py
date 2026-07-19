@@ -157,6 +157,40 @@ def match_entities(text: str, alias_map: dict) -> list:
     return out
 
 
+def load_synonym_map(conn) -> dict:
+    """{phrase_norm: canonical_representative}. The concept-synonym rewrite table."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT phrase_norm, canonical FROM concept_synonyms")
+            return dict(cur.fetchall())
+    except Exception:      # noqa: BLE001 -- pre-migration is not fatal
+        return {}
+
+
+def apply_synonyms(text: str, synonym_map: dict) -> str:
+    """
+    Rewrite every context-synonym in `text` to its canonical representative, so "ongoing
+    hydro projects" and "under construction hydro projects" become the SAME string and
+    therefore embed identically.
+
+    Longest phrase first (so "under construction stage" wins over "under construction"),
+    word-boundary, case-insensitive. Deterministic; no LLM at query time.
+    """
+    if not text or not synonym_map:
+        return text
+    out = text
+    for phrase in sorted(synonym_map, key=len, reverse=True):
+        canon = synonym_map[phrase]
+        if normalise(phrase) == normalise(canon):
+            continue                       # the representative maps to itself; skip
+        parts = [re.escape(tok) for tok in phrase.split(" ") if tok]
+        if not parts:
+            continue
+        pat = r"\b" + r"[\s.\-]*".join(parts) + r"\b"
+        out = re.sub(pat, canon, out, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", out).strip()
+
+
 def canonicalise_text(text: str, matched: list) -> str:
     """
     Rewrite each matched entity's SURFACE form in `text` to its canonical name, so

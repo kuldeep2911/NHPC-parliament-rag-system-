@@ -57,6 +57,14 @@ def _load_alias_map(conn):
         return {}
 
 
+def _load_synonym_map(conn):
+    """The concept-synonym rewrite map, loaded once for the query path."""
+    try:
+        return _edict.load_synonym_map(conn)
+    except Exception:      # noqa: BLE001
+        return {}
+
+
 log = logging.getLogger("nhpc.phase4.api")
 
 # Built once at startup: providers, entity vocabulary, the compiled graph.
@@ -88,6 +96,7 @@ async def lifespan(_app: FastAPI):
         "reranker": get_reranker(cfg) if cfg.rerank_enabled else None,
         "entity_vocab": entity.load_vocabulary(conn),   # legacy, unused by the retriever now
         "alias_map": _load_alias_map(conn),
+        "synonym_map": _load_synonym_map(conn),
         "llm": None,
         "tracer": QueryTracer(cfg),
     }

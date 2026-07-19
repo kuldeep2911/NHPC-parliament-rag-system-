@@ -155,30 +155,83 @@ def _parse_verdicts(raw: str, n: int):
 _BATCH = 12
 
 
-def llm_verify(cfg, llm, query: str, candidates: list):
+def _qhash(query: str) -> str:
+    import hashlib
+    return hashlib.sha256((query or "").strip().lower().encode()).hexdigest()
+
+
+def _cache_lookup(conn, qhash, candidates):
+    """Return {sub_question_id: (verdict, reason)} already cached for this canonical query."""
+    if conn is None:
+        return {}
+    ids = [c.get("sub_question_id") for c in candidates if c.get("sub_question_id")]
+    if not ids:
+        return {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT sub_question_id, verdict, reason FROM verify_cache
+                           WHERE query_hash=%s AND sub_question_id = ANY(%s)""", (qhash, ids))
+            return {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+    except Exception:      # noqa: BLE001 -- cache miss on error, never fatal
+        return {}
+
+
+def _cache_store(conn, qhash, candidate, verdict, reason):
+    if conn is None or not candidate.get("sub_question_id"):
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO verify_cache
+                             (query_hash, doc_key, sub_question_id, verdict, reason)
+                           VALUES (%s,%s,%s,%s,%s)
+                           ON CONFLICT (query_hash, sub_question_id) DO UPDATE
+                             SET verdict=EXCLUDED.verdict, reason=EXCLUDED.reason""",
+                        (qhash, candidate.get("doc_key"), candidate["sub_question_id"],
+                         verdict, (reason or "")[:300]))
+        conn.commit()
+    except Exception:      # noqa: BLE001
+        pass
+
+
+def llm_verify(cfg, llm, query: str, candidates: list, conn=None):
     """
-    Batched verification. Returns (verified, meta).
+    Batched verification, with a DETERMINISTIC per-(canonical-query) cache.
 
       verified : the candidates the LLM judged similar, each annotated with verify_verdict
                  and verify_reason. Order preserved (relevance order).
       meta     : {"unavailable": bool, "ms": int, "checked": int, "kept": int,
                   "reason": <why unavailable, if so>}
 
-    Chunked at _BATCH so a large candidate set does not force one enormous JSON array that
-    truncates and fails to parse. Each chunk is one call; a chunk that fails to parse after
-    a retry makes THE WHOLE verification unavailable (fail soft, flagged) rather than
-    silently dropping that chunk's results.
+    THE CACHE is what makes synonym-equivalent queries return the SAME final set: the LLM is
+    non-deterministic, so two queries canonicalised to the same string could otherwise get
+    different verdicts. Caching by (query_hash, sub_question_id) means the same canonical
+    query always reuses the same verdict -- and skips the API call. Only cache MISSES go to
+    the LLM.
 
-    NEVER raises. On any failure the sigmoid set is returned unverified with
-    meta["unavailable"]=True, so an LLM outage never costs the officer their results.
+    Chunked at _BATCH so a large candidate set does not force one enormous JSON array. A
+    chunk that fails to parse after a retry makes THE WHOLE verification unavailable (fail
+    soft, flagged). NEVER raises.
     """
     t0 = time.time()
     if not candidates:
         return [], {"unavailable": False, "ms": 0, "checked": 0, "kept": 0}
 
+    qhash = _qhash(query)
+    cached = _cache_lookup(conn, qhash, candidates)
+    to_call = [c for c in candidates if c.get("sub_question_id") not in cached]
+
     verified = []
-    for start in range(0, len(candidates), _BATCH):
-        chunk = candidates[start:start + _BATCH]
+    # apply cached verdicts first (deterministic, no API)
+    for c in candidates:
+        if c.get("sub_question_id") in cached:
+            verdict, reason = cached[c["sub_question_id"]]
+            c["verify_verdict"] = verdict
+            c["verify_reason"] = reason
+            if verdict == "similar":
+                verified.append(c)
+
+    for start in range(0, len(to_call), _BATCH):
+        chunk = to_call[start:start + _BATCH]
         try:
             verdicts = _verify_chunk(cfg, llm, query, chunk)
         except Exception as e:      # noqa: BLE001 -- LLM down/timeout mid-batch
@@ -195,16 +248,21 @@ def llm_verify(cfg, llm, query: str, candidates: list):
             verdict, reason = verdicts.get(i, ("similar", "no verdict returned — kept"))
             c["verify_verdict"] = verdict
             c["verify_reason"] = reason
+            _cache_store(conn, qhash, c, verdict, reason)   # deterministic for next time
             if verdict == "similar":
                 verified.append(c)
             else:
                 log.info("llm_verify: dropped %s — %s", c.get("doc_key"), reason[:80])
 
+    # verified was filled cache-first then LLM-second; restore the original relevance order
+    # so the result order does not depend on what happened to be cached.
+    order = {id(c): n for n, c in enumerate(candidates)}
+    verified.sort(key=lambda c: order.get(id(c), 1e9))
+
     ms = int((time.time() - t0) * 1000)
-    log.info("llm_verify: checked %d, kept %d, %d ms (%d chunk(s))",
-             len(candidates), len(verified), ms,
-             (len(candidates) + _BATCH - 1) // _BATCH)
-    return verified, {"unavailable": False, "ms": ms,
+    log.info("llm_verify: checked %d (%d cached, %d called), kept %d, %d ms",
+             len(candidates), len(cached), len(to_call), len(verified), ms)
+    return verified, {"unavailable": False, "ms": ms, "cached": len(cached),
                       "checked": len(candidates), "kept": len(verified)}
 
 
