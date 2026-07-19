@@ -97,25 +97,22 @@ def extract_entities(query_text, vocabulary):
 #
 # ILIKE over a small corpus (1914 sub-questions) is fast enough and needs no extra index;
 # revisit with a trigram (pg_trgm) index if the corpus grows an order of magnitude.
+# CANONICAL entity join. The query's mentions are canonicalised to entity_ids by the SAME
+# dictionary matcher used at index time (see entities/dictionary.match_entities), and this
+# joins the pre-computed sub_question_entities links. That is the whole fix: a record linked
+# to 'himachal_pradesh' matches whether the officer typed "HP" or "Himachal Pradesh", because
+# both queries canonicalise to the same id BEFORE they reach this SQL. No ILIKE, no
+# per-query text scan -- a straight indexed join on entity_id.
 _SQL = """
-WITH ents AS (SELECT unnest(%(entities)s::text[]) AS e)
 SELECT sq.sub_question_id,
        sq.doc_key,
        sq.sub_question_local,
        sq.question_text,
-       count(DISTINCT ents.e) AS n_entity_hits
-FROM sub_questions sq
+       count(DISTINCT sqe.entity_id) AS n_entity_hits
+FROM sub_question_entities sqe
+JOIN sub_questions sq ON sq.sub_question_id = sqe.sub_question_id
 JOIN diaries d        ON d.doc_key = sq.doc_key
-JOIN answer_groups ag ON ag.answer_group_id = sq.answer_group_id
-CROSS JOIN ents
-WHERE (
-        sq.question_text ILIKE '%%' || ents.e || '%%'
-     OR ag.answer_text   ILIKE '%%' || ents.e || '%%'
-     OR EXISTS (
-            SELECT 1 FROM answer_tables t
-            JOIN answer_table_rows r ON r.table_id = t.table_id
-            WHERE t.doc_key = sq.doc_key AND ents.e = ANY(r.entities))
-      )
+WHERE sqe.entity_id = ANY(%(entities)s::text[])
   AND d.active                       -- soft-deleted documents never appear in results
 {filters}
 GROUP BY sq.sub_question_id, sq.doc_key, sq.sub_question_local, sq.question_text

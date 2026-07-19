@@ -103,6 +103,12 @@ class Phase4Config(Phase3Config):
     # returned unverified with a "verification_unavailable" flag rather than an error.
     llm_verify_enabled: bool = field(
         default_factory=lambda: _env_bool("LLM_VERIFY_ENABLED", True))
+
+    # Run the LLM entity-discovery pass when a file is uploaded (offline, in the watcher --
+    # NOT the query path). Off by default: the seed lists + "Full (ABBR)" mining already
+    # cover most entities for free; the per-file LLM call is opt-in.
+    entities_llm_on_upload: bool = field(
+        default_factory=lambda: _env_bool("ENTITIES_LLM_ON_UPLOAD", False))
     llm_verify_max_tokens: int = field(
         default_factory=lambda: _env_int("LLM_VERIFY_MAX_TOKENS", 1500))
 

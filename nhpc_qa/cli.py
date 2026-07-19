@@ -124,6 +124,15 @@ def cmd_purge(args):
     return purge_main(args)
 
 
+def cmd_build_entities(args):
+    from nhpc_qa.entities.build import main as be
+    argv = []
+    if args.llm: argv.append("--llm")
+    if args.only: argv += ["--only", args.only]
+    if args.extract_only: argv.append("--extract-only")
+    return be(argv)
+
+
 def cmd_backfill_dates(args):
     from nhpc_qa.pipeline.index.backfill_dates import main as bf
     argv = []
@@ -215,6 +224,15 @@ def build_parser():
     p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     p.add_argument("--dry-run", action="store_true", help="show what would be purged")
     p.set_defaults(func=cmd_purge)
+
+    # build-entities — build/update the entity dictionary + extract per-record entities
+    p = sub.add_parser("build-entities",
+                       help="build the entity dictionary (seeds + ABBR mining + --llm)")
+    p.add_argument("--llm", action="store_true", help="offline LLM discovery (API cost)")
+    p.add_argument("--only", default=None, help="one question_id")
+    p.add_argument("--extract-only", action="store_true",
+                   help="re-extract records against the current dictionary")
+    p.set_defaults(func=cmd_build_entities)
 
     # backfill-dates — rule-based over EXISTING data. No Docling, no re-parse; the LLM
     # only on the leftovers, and only if asked.

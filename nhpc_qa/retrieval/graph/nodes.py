@@ -24,7 +24,7 @@ import logging
 import re
 import time
 
-from nhpc_qa.retrieval.search import dense, entity, keyword, fuse
+from nhpc_qa.retrieval.search import dense, entity, fuse   # keyword/BM25 removed from fusion
 
 log = logging.getLogger("nhpc.phase4.graph")
 
@@ -52,12 +52,29 @@ def query_process(state, deps):
     # PROCESSING ONLY -- see the module docstring. Never a retrieval filter.
     language = "hi" if _DEVANAGARI.search(q) else "en"
 
-    query_vec = deps["embedder"].embed_queries([q])[0]
-    entities = entity.extract_entities(q, deps["entity_vocab"])
+    # Canonicalise the query's entity mentions against the SAME dictionary used at index
+    # time. Two things use the result:
+    #   1. entity_ids -> the entity retriever (a record linked to himachal_pradesh matches
+    #      whether the query said "HP" or "Himachal Pradesh").
+    #   2. a CANONICALISED query STRING -> dense embedding + reranking. "projects in HP" is
+    #      rewritten to "projects in Himachal Pradesh" before it is embedded, so the dense
+    #      neighbourhood and the reranker score are the SAME for both surface forms. Without
+    #      this the entity signal agreed but dense/rerank still read the raw text ("HP"
+    #      embeds only 0.63 like "Himachal Pradesh"), and the final SETS diverged. Measured.
+    # It is deterministic (dictionary lookup, no LLM) and never filters by language.
+    from nhpc_qa.entities import dictionary as _edict
+    matched = _edict.match_entities(q, deps.get("alias_map") or {})
+    entity_ids = [m["entity_id"] for m in matched]
+    entities = [m["canonical"] for m in matched]
+    q_canon = _edict.canonicalise_text(q, matched)
+
+    query_vec = deps["embedder"].embed_queries([q_canon])[0]
 
     _timed(state, "query_process", t0)
-    log.info("query_process: lang=%s entities=%s", language, entities)
-    return {"language": language, "query_vec": query_vec, "entities": entities,
+    log.info("query_process: lang=%s entities=%s canon=%r", language, entities,
+             q_canon if q_canon != q else None)
+    return {"language": language, "query_vec": query_vec, "query_canon": q_canon,
+            "entities": entities, "entity_ids": entity_ids,
             "widened": state.get("widened", False)}
 
 
@@ -94,23 +111,28 @@ def hybrid_retrieve(state, deps):
     session = None if widened else state.get("session")
     nhpc_only = False if widened else bool(state.get("nhpc_only"))
 
-    ents = state.get("entities") or []
+    # CANONICAL entity ids (not raw text). See query_process.
+    entity_ids = state.get("entity_ids") or []
 
+    # RETRIEVAL IS DENSE + ENTITY. BM25/keyword was REMOVED from fusion: the gating test
+    # (scratchpad/step0_bm25off.py) proved it was inert -- turning it off produced
+    # byte-identical top-5 results, because the cross-encoder reranker dominates the fused
+    # pool. Adjacent-project precision (Teesta-VI vs Teesta-V) is carried by the entity
+    # retriever, which the same test confirmed. The tsvector column/index remain in the
+    # schema (migration 001) but are no longer read here -- disabled, not dropped, so this
+    # is reversible.
     retrieved = {
         "dense": dense.search(conn, state["query_vec"], cfg.dense_top_n * factor,
                               house=house, session=session, nhpc_only=nhpc_only),
-        "keyword": keyword.search(conn, state["query"], cfg.keyword_top_n * factor,
-                                  house=house, session=session, nhpc_only=nhpc_only),
-        # entity is BOOST-ONLY on a widened pass: it contributes RRF rank but its
-        # metadata filters are gone, so it cannot narrow the candidate pool.
-        "entity": entity.search(conn, ents, cfg.entity_top_n * factor,
+        # entity is BOOST-ONLY on a widened pass: it contributes RRF rank but its metadata
+        # filters are gone, so it cannot narrow the candidate pool.
+        "entity": entity.search(conn, entity_ids, cfg.entity_top_n * factor,
                                 house=house, session=session, nhpc_only=nhpc_only),
     }
 
     _timed(state, "retrieve_widened" if widened else "retrieve", t0)
-    log.info("hybrid_retrieve(widened=%s, factor=%d): dense=%d keyword=%d entity=%d",
-             widened, factor, len(retrieved["dense"]), len(retrieved["keyword"]),
-             len(retrieved["entity"]))
+    log.info("hybrid_retrieve(widened=%s, factor=%d): dense=%d entity=%d",
+             widened, factor, len(retrieved["dense"]), len(retrieved["entity"]))
     return {"retrieved": retrieved}
 
 
@@ -121,17 +143,18 @@ def fuse_results(state, deps):
     """
     Weighted RRF, deduped by doc_key.
 
-    ELIGIBLE vs FIRED (Change 2): the entity retriever is only ELIGIBLE when the query
-    names a known entity. A query with no project name can reach at most 2 retrievers,
-    so scoring agreement out of a flat 3 would make every such query look like it had
-    poor agreement. Both counts are recorded.
+    ELIGIBLE vs FIRED. Retrieval is now DENSE + ENTITY (BM25 removed). Dense is ALWAYS
+    eligible; the entity retriever is eligible only when the query canonicalises to a known
+    entity. So a query naming no entity reaches 1 retriever, one naming an entity reaches 2 --
+    and agreement is scored out of what was ELIGIBLE, not a flat count, so a no-entity query
+    is not made to look like it had poor agreement.
     """
     t0 = time.time()
     cfg = deps["cfg"]
     retrieved = state.get("retrieved") or {}
 
-    eligible = {"dense", "keyword"}
-    if state.get("entities"):
+    eligible = {"dense"}
+    if state.get("entity_ids"):
         eligible.add("entity")
     fired = {r for r in eligible if retrieved.get(r)}
 
@@ -169,8 +192,12 @@ def rerank(state, deps):
         return {"reranked": out, "rerank_failed": False}
 
     passages = [c["question_text"] or "" for c in fused]
+    # Rerank against the CANONICALISED query (same rewrite dense used), so "HP" and
+    # "Himachal Pradesh" get the same cross-encoder scores. Falls back to the raw query if
+    # canonicalisation produced nothing (no entity mentioned).
+    rerank_q = state.get("query_canon") or state["query"]
     try:
-        ranking = deps["reranker"].rerank(state["query"], passages)
+        ranking = deps["reranker"].rerank(rerank_q, passages)
     except Exception as e:                       # noqa: BLE001 -- optional layer
         log.warning("rerank failed (%s: %s) — falling back to RRF order", type(e).__name__, e)
         out = [dict(c, rerank_logit=None, rerank_movement=0) for c in fused[:k]]

@@ -21,6 +21,8 @@ class QueryState(TypedDict, total=False):
     # query must be able to match an English sub-question and vice versa.
     language: str                # 'hi' | 'en'  (informational + generation prompt)
     query_vec: list              # QUERY-mode embedding (passages were indexed as passage)
+    query_canon: str             # query with entity mentions canonicalised (HP->Himachal Pradesh)
+    entity_ids: list             # canonical entity ids matched in the query
     entities: list               # entities recognised in the query ([] -> entity retriever
                                  # is INELIGIBLE, not "failed")
 

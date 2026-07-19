@@ -147,6 +147,25 @@ def process_upsert(cfg, conn, source_path: str):
     if rc not in (0, None):
         raise RuntimeError(f"index/embed failed (exit {rc})")
 
+    # ENTITIES — dictionary FIRST, then extract, so the new records are retrievable by the
+    # entity retriever. Order matters and is the same as the full build: mine this file's
+    # new "Full (ABBR)" patterns + LLM-discover -> add NEW entities -> extract canonical
+    # entities for the new records against the UPDATED dictionary. Idempotent (deterministic
+    # ids), so re-processing adds no duplicates. A failure here must not lose the ingest --
+    # the record is already loaded and searchable by dense; entities just would not be
+    # linked until the next build.
+    try:
+        from nhpc_qa.entities.build import build as _build_entities
+        es = _build_entities(cfg, conn, use_llm=bool(getattr(cfg, "entities_llm_on_upload",
+                                                              False)),
+                             only=only_token)
+        log.info("entities: +%d entity(ies), %d link(s) for %s",
+                 es["entities_after"] - es["entities_before"], es["links"], only_token)
+    except Exception as e:      # noqa: BLE001 -- never fail the ingest on entity build
+        log.error("entity build failed for %s (%s) — record is searchable by dense; run "
+                  "`nhpc build-entities --only %s` to link entities",
+                  only_token, type(e).__name__, only_token)
+
     # What did we actually end up with? (also REACTIVATES anything that had been
     # soft-deleted and has now come back -- see reactivate())
     docs = _docs_for_slice(conn, only_token, session_dir, session_slug)

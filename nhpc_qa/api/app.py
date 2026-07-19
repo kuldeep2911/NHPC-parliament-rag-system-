@@ -44,9 +44,18 @@ from nhpc_qa.retrieval.graph.build import build_graph
 from nhpc_qa.core.trace.query_tracer import QueryTracer
 from nhpc_qa.core.providers.rerank import get_reranker
 from nhpc_qa.retrieval.search import entity
+from nhpc_qa.entities import dictionary as _edict
 from nhpc_qa.api import (auth_routes, draft_routes, supporting_routes, tree_routes,
                          upload_routes)
 from nhpc_qa.api.security import audit, deps, paths, rbac, users
+
+def _load_alias_map(conn):
+    """The entity dictionary alias->canonical map, loaded once for the query path."""
+    try:
+        return _edict.load_alias_map(conn)
+    except Exception:      # noqa: BLE001 -- pre-migration / empty dict is not fatal
+        return {}
+
 
 log = logging.getLogger("nhpc.phase4.api")
 
@@ -77,7 +86,8 @@ async def lifespan(_app: FastAPI):
         "conn": conn,
         "embedder": get_embedder(cfg),
         "reranker": get_reranker(cfg) if cfg.rerank_enabled else None,
-        "entity_vocab": entity.load_vocabulary(conn),
+        "entity_vocab": entity.load_vocabulary(conn),   # legacy, unused by the retriever now
+        "alias_map": _load_alias_map(conn),
         "llm": None,
         "tracer": QueryTracer(cfg),
     }
