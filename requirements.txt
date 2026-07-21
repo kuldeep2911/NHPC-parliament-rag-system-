@@ -1,0 +1,65 @@
+# NHPC parliamentary Q&A — PINNED runtime dependencies.
+#
+# These are the EXACT versions verified working on the build machine (Python 3.12).
+# For the air-gapped NHPC server, reproducibility beats being current — install ONLY
+# from this file, from a local wheelhouse (see deploy/README_DEPLOY.md, step "offline
+# wheels"). Do not `pip install -U` anything on the server.
+#
+#   python -m pip install --no-index --find-links ./wheelhouse -r requirements.txt
+#
+# Docling pulls the heavy ML stack (torch + rapidocr + transformers). It is needed ONLY
+# for the parse/ingest pipeline (crawling new question folders and supporting documents).
+# If the server only SERVES an already-built index and never parses new files, you can use
+# requirements-serve.txt instead (a much smaller install with no torch).
+
+# --- parsing (Docling brings torch + rapidocr; it is the heavy one) -----------
+docling==2.108.0
+docling-core==2.85.0
+docling-ibm-models==3.13.3
+docling-parse==7.4.0
+pdfplumber==0.11.9
+pypdf==6.11.0
+pypdfium2==5.7.1
+python-docx==1.2.0
+openpyxl==3.1.5
+pandas==2.2.2
+lxml==6.1.1
+
+# ML runtime pulled by docling — pinned explicitly so the wheelhouse is complete
+torch==2.12.1
+torchvision==0.27.1
+transformers==5.5.0
+tokenizers==0.22.2
+safetensors==0.7.0
+huggingface-hub==1.9.0
+accelerate==1.13.0
+rapidocr==3.9.1
+onnxruntime==1.25.0
+numpy==2.0.2
+pillow==12.2.0
+
+# --- database + vectors -------------------------------------------------------
+psycopg[binary]==3.3.2
+pgvector==0.4.2
+
+# --- retrieval ----------------------------------------------------------------
+langgraph==1.1.9
+langgraph-checkpoint==4.0.2
+langgraph-prebuilt==1.0.11
+
+# --- API ----------------------------------------------------------------------
+fastapi==0.116.1
+starlette==0.47.3
+uvicorn[standard]==0.46.0
+pydantic==2.12.5
+pydantic-core==2.41.5
+
+# --- auth ---------------------------------------------------------------------
+argon2-cffi==25.1.0
+argon2-cffi-bindings==21.2.0
+
+# --- watcher + misc -----------------------------------------------------------
+watchdog==6.0.0
+python-dotenv==1.2.2
+requests==2.32.5
+httpx==0.28.1

@@ -1,0 +1,110 @@
+# NHPC Q&A — LOCAL MODEL SERVING (fully on-prem, nothing leaves the network).
+#
+# Three model services, each matching a config-selectable backend in the app:
+#   embed   -> EMBED_BACKEND=nvidia_selfhosted   EMBED_SELFHOSTED_URL=http://localhost:8801/v1/embeddings
+#   rerank  -> RERANK_BACKEND=nvidia_selfhosted  RERANK_SELFHOSTED_URL=http://localhost:8802/v1/ranking
+#   llm     -> NHPC_LLM_BACKEND=ollama           NHPC_OLLAMA_BASE_URL=http://localhost:11434/v1
+#
+# ⚠️ AIR-GAPPED SERVER. The NIM images and the Ollama model are NOT downloaded here at
+# runtime. On a machine WITH internet you pull them once, save them, and copy them to the
+# server — see deploy/README_DEPLOY.md ("offline models"). This compose only RUNS them.
+#
+# GPU. The two NIM services need an NVIDIA GPU + the NVIDIA Container Toolkit. Ollama runs
+# on GPU if present, else CPU (slower but works). If the server has NO GPU at all, run the
+# embedder/reranker from local HuggingFace weights instead (documented in
+# nhpc_qa/core/providers/embeddings.py, NvidiaSelfHostedEmbedder path B) and delete the two
+# nim services here.
+#
+#   cd deploy/models
+#   cp .env.models.example .env        # set NGC_API_KEY only if you pull on THIS machine
+#   docker compose up -d
+#   docker compose ps                  # all healthy?
+
+services:
+
+  # ---- embeddings: llama-nemotron-embed-1b-v2 (dim 2048) --------------------
+  embed:
+    image: ${EMBED_IMAGE:-nvcr.io/nim/nvidia/llama-nemotron-embed-1b-v2:latest}
+    runtime: nvidia
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY:-}          # only needed if the image self-downloads; empty on air-gap
+    ports:
+      - "${EMBED_PORT:-8801}:8000"
+    volumes:
+      - nim_embed_cache:/opt/nim/.cache
+    shm_size: "8gb"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/v1/health/ready || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ---- reranker: llama-nemotron-rerank-1b-v2 --------------------------------
+  rerank:
+    image: ${RERANK_IMAGE:-nvcr.io/nim/nvidia/llama-nemotron-rerank-1b-v2:latest}
+    runtime: nvidia
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY:-}
+    ports:
+      - "${RERANK_PORT:-8802}:8000"
+    volumes:
+      - nim_rerank_cache:/opt/nim/.cache
+    shm_size: "8gb"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/v1/health/ready || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ---- LLM: Ollama serving Qwen3 (draft + verify + entity discovery) --------
+  # The model itself is NOT pulled here (air-gap). Load it once from a saved blob:
+  #   docker compose exec ollama ollama create qwen3:14b -f /models/Modelfile
+  # or copy an already-populated ollama volume. See README_DEPLOY.md.
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.5.7}
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+      - ${OLLAMA_IMPORT_DIR:-./ollama-import}:/models:ro
+    environment:
+      OLLAMA_KEEP_ALIVE: "30m"           # keep the model resident between requests
+      OLLAMA_HOST: "0.0.0.0:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    # GPU if available; comment this block out for a CPU-only server.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  nim_embed_cache:
+  nim_rerank_cache:
+  ollama_models:

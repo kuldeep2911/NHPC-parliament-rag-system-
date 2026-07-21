@@ -11,9 +11,11 @@
 
 [Unit]
 Description=NHPC parliamentary Q&A — retrieval API
-Documentation=file:///opt/nhpc/README.md
-After=network-online.target postgresql.service
+Documentation=file:///opt/nhpc/deploy/README_DEPLOY.md
+# Ordered AFTER the bootstrap oneshot, so the API never serves a half-built index.
+After=network-online.target postgresql.service nhpc-bootstrap.service
 Wants=network-online.target
+Requires=nhpc-bootstrap.service
 
 [Service]
 Type=simple

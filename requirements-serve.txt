@@ -1,0 +1,36 @@
+# NHPC Q&A — SERVE-ONLY dependencies (no torch / docling / OCR).
+#
+# Use this ONLY if the NHPC server just serves an already-built index and NEVER parses new
+# files (no watcher, no new uploads through the parse pipeline). It is a fraction of the
+# size of requirements.txt because it drops the entire ML parsing stack.
+#
+# If officers will upload new reference documents or new question folders will be added on
+# the server, you MUST use requirements.txt instead (parsing needs docling+torch).
+#
+#   python -m pip install --no-index --find-links ./wheelhouse -r requirements-serve.txt
+
+# --- database + vectors -------------------------------------------------------
+psycopg[binary]==3.3.2
+pgvector==0.4.2
+
+# --- retrieval ----------------------------------------------------------------
+langgraph==1.1.9
+langgraph-checkpoint==4.0.2
+langgraph-prebuilt==1.0.11
+
+# --- API ----------------------------------------------------------------------
+fastapi==0.116.1
+starlette==0.47.3
+uvicorn[standard]==0.46.0
+pydantic==2.12.5
+pydantic-core==2.41.5
+
+# --- auth ---------------------------------------------------------------------
+argon2-cffi==25.1.0
+argon2-cffi-bindings==21.2.0
+
+# --- misc ---------------------------------------------------------------------
+watchdog==6.0.0
+python-dotenv==1.2.2
+requests==2.32.5
+httpx==0.28.1

@@ -1,0 +1,31 @@
+# One-shot bootstrap: migrate + seed + load + embed. Runs ONCE before the API, and is a
+# no-op on every subsequent boot (each step is idempotent/resumable), so it is safe to
+# leave enabled — it just confirms the index is complete before serving.
+#
+#   sudo systemctl enable nhpc-bootstrap      # runs before nhpc-api
+#   sudo systemctl start  nhpc-bootstrap      # run it now
+#   journalctl -u nhpc-bootstrap -f
+#
+# nhpc-api is ordered After= this, so serving never starts on a half-built index.
+
+[Unit]
+Description=NHPC Q&A — one-shot index bootstrap (migrate, seed, load, embed)
+After=network-online.target postgresql.service docker.service
+Wants=network-online.target
+# If you run Postgres/models via docker compose, add the compose units to After=/Wants=.
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+User=nhpc
+Group=nhpc
+WorkingDirectory=/opt/nhpc
+EnvironmentFile=/opt/nhpc/.env
+Environment=PYTHONUNBUFFERED=1
+# Wait for the model services + DB to answer before embedding (up to ~5 min).
+ExecStartPre=/opt/nhpc/deploy/preflight.sh
+ExecStart=/opt/nhpc/deploy/bootstrap.sh
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target
