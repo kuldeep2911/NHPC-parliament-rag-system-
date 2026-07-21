@@ -1,0 +1,102 @@
+============================================================================================
+ANSWER-EMBEDDING EXPERIMENT — BEFORE vs AFTER
+============================================================================================
+BEFORE: use_answer_embeddings=None  threshold=0.1  weight=None
+AFTER : use_answer_embeddings=True  threshold=0.1  weight=0.5
+
+--------------------------------------------------------------------------------------------
+[direct] 'electricity dues in Jammu and Kashmir'
+    count      : 1 -> 1   (verify kept 1/2 -> 1/2)
+    entities   : ['Jammu & Kashmir']
+    unchanged set
+--------------------------------------------------------------------------------------------
+[direct] 'current status of Subansiri Lower hydroelectric project'
+    count      : 3 -> 3   (verify kept 3/12 -> 3/12)
+    entities   : ['Subansiri Lower Hydroelectric Project']
+    unchanged set
+--------------------------------------------------------------------------------------------
+[direct] 'seismic monitoring and earthquakes near NHPC dams'
+    count      : 0 -> 0   (verify kept 0/0 -> 0/0)
+    entities   : ['National Hydro Power Company']
+    unchanged set
+--------------------------------------------------------------------------------------------
+[direct] 'NHPC bonds raised on behalf of Ministry of Power'
+    count      : 0 -> 0   (verify kept 0/0 -> 0/0)
+    entities   : ['National Hydro Power Company', 'Ministry of Power']
+    unchanged set
+--------------------------------------------------------------------------------------------
+[answer] 'Subansiri commissioning schedule'
+    count      : 5 -> 5   (verify kept 5/5 -> 5/5)
+    entities   : ['Subansiri']
+    unchanged set
+--------------------------------------------------------------------------------------------
+[answer] 'hydro projects in the North East region'
+    count      : 5 -> 11   (verify kept 5/14 -> 11/34)  ✓ recall gain candidate
+    entities   : ['North East']
+    NEW (6):
+        + 2025-nov-dec/lok_sabha/3071  sig=0.596547 logit=0.3911 verdict=similar
+          via retrievers=['dense', 'dense_answer']  Q='(a) whether the Government has launched any scheme to support the deve'
+        + 2023-nov-jan/rajya_sabha/s-1443  sig=0.958069 logit=3.1289 verdict=similar
+          via retrievers=['dense']  Q='(a) What is the present status of Hydropower Project constructed by th'
+        + 2023-jan-apr/lok_sabha/1894  sig=0.968142 logit=3.4141 verdict=similar
+          via retrievers=['dense']  Q='(a) the number of Hydroelectric Projects currently in use in Meghalaya'
+        + 2023-dec-jan/rajya_sabha/u-1330  sig=0.579349 logit=0.3201 verdict=similar
+          via retrievers=['dense']  Q='(a) The total cost incurred by Government in the construction of the S'
+        + 2022-feb-mar/rajya_sabha/u-3419  sig=0.194364 logit=-1.4219 verdict=similar
+          via retrievers=['dense', 'dense_answer']  Q='(a) The details of the projects currently ongoing in the North Eastern'
+        + 2026-jan-mar/vidhan_sabha/ubansiri  sig=0.968142 logit=3.4141 verdict=similar
+          via retrievers=['dense']  Q='(a) What is the status of the Subansiri Hydro-Project and when is it l'
+--------------------------------------------------------------------------------------------
+[answer] 'Teesta projects in Sikkim'
+    count      : 2 -> 2   (verify kept 2/7 -> 2/7)
+    entities   : ['Sikkim']
+    unchanged set
+--------------------------------------------------------------------------------------------
+[boilerplate] 'dam safety and seismic design'
+    count      : 0 -> 0   (verify kept 0/0 -> 0/0)
+    entities   : []
+    unchanged set
+--------------------------------------------------------------------------------------------
+[boilerplate] 'matters to be replied by Ministry of Power'
+    count      : 0 -> 0   (verify kept 0/21 -> 0/42)
+    entities   : ['Ministry of Power']
+    unchanged set
+--------------------------------------------------------------------------------------------
+[boilerplate] 'information given at annexure'
+    count      : 0 -> 0   (verify kept 0/0 -> 0/0)
+    entities   : []
+    unchanged set
+--------------------------------------------------------------------------------------------
+[paraphrase] 'projects in HP'
+    count      : 8 -> 8   (verify kept 8/17 -> 8/17)
+    entities   : ['Himachal Pradesh']
+    unchanged set
+--------------------------------------------------------------------------------------------
+[paraphrase] 'projects in Himachal Pradesh'
+    count      : 8 -> 8   (verify kept 8/17 -> 8/17)
+    entities   : ['Himachal Pradesh']
+    unchanged set
+
+============================================================================================
+PARAPHRASE STABILITY  (HP  ==  Himachal Pradesh)
+============================================================================================
+  same doc_key SET  : True
+  same ORDER        : True
+  VERDICT: paraphrase pair still returns the same results
+
+============================================================================================
+SUMMARY BY QUERY CLASS
+============================================================================================
+  class        queries  results before  results after   new  dropped
+  direct             4               4              4     0        0
+  answer             3              12             18     6        0
+  boilerplate        3               0              0     0        0
+  paraphrase         2              16             16     0        0
+
+============================================================================================
+READING (evidence, not a recommendation)
+============================================================================================
+  RECALL GAIN  : answer-content queries added 6 new result(s) across 3 queries.
+  FALSE POSITIVES: boilerplate-bait queries added 0 new result(s) (want 0 — these survive the LLM verify only if genuinely similar).
+  DROPPED       : 0 previously-shown result(s) lost anywhere (want 0 — answers should ADD, not remove).
+  The flag remains default FALSE. Decision is yours from this evidence.

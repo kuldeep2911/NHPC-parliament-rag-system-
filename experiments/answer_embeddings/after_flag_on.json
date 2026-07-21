@@ -1,0 +1,1011 @@
+{
+  "tag": "after_flag_on",
+  "captured_at": "2026-07-21T12:32:24",
+  "use_answer_embeddings": true,
+  "config": {
+    "similarity_threshold": 0.1,
+    "dense_top_n": 30,
+    "entity_top_n": 30,
+    "rerank_candidate_pool": 80,
+    "rerank_model": "nvidia/llama-nemotron-rerank-1b-v2",
+    "rrf_k": 60,
+    "llm_verify_enabled": true,
+    "answer_embed_weight": 0.5
+  },
+  "queries": {
+    "electricity dues in Jammu and Kashmir": {
+      "kind": "direct",
+      "query": "electricity dues in Jammu and Kashmir",
+      "language": "en",
+      "entities": [
+        "Jammu & Kashmir"
+      ],
+      "query_canon": "electricity dues in Jammu & Kashmir",
+      "result_count": 1,
+      "verification_unavailable": false,
+      "verify_checked": 2,
+      "verify_kept": 1,
+      "fuse_candidates": 51,
+      "fuse_top": 0.086253,
+      "fuse_gap": 0.02416,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "elapsed_ms": 1406,
+      "results": [
+        {
+          "rank": 1,
+          "relevance_rank": 1,
+          "doc_key": "2020-feb-mar/lok_sabha/8773",
+          "sub_question_id": "2020-feb-mar/lok_sabha/8773#8773_d",
+          "part_label": "d",
+          "question_text": "(d) The electricity dues of various Government departments and private companies and consumers in Jammu & Kashmir?",
+          "relevance": 1.0,
+          "rerank_logit": 20.4844,
+          "verify_verdict": "similar",
+          "reply_date": null,
+          "retrievers": [
+            "dense",
+            "dense_answer",
+            "entity"
+          ]
+        }
+      ],
+      "doc_keys": [
+        "2020-feb-mar/lok_sabha/8773"
+      ]
+    },
+    "current status of Subansiri Lower hydroelectric project": {
+      "kind": "direct",
+      "query": "current status of Subansiri Lower hydroelectric project",
+      "language": "en",
+      "entities": [
+        "Subansiri Lower Hydroelectric Project"
+      ],
+      "query_canon": "current status of Subansiri Lower Hydroelectric Project",
+      "result_count": 3,
+      "verification_unavailable": false,
+      "verify_checked": 12,
+      "verify_kept": 3,
+      "fuse_candidates": 33,
+      "fuse_top": 0.059057,
+      "fuse_gap": 0.011379,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "elapsed_ms": 1781,
+      "results": [
+        {
+          "rank": 1,
+          "relevance_rank": 2,
+          "doc_key": "2023-nov-jan/rajya_sabha/s-1443",
+          "sub_question_id": "2023-nov-jan/rajya_sabha/s-1443#s-1443_a",
+          "part_label": "a",
+          "question_text": "(a) What is the present status of Hydropower Project constructed by the NHPC at Gerukamukh in Subansiri River?",
+          "relevance": 0.999989,
+          "rerank_logit": 11.375,
+          "verify_verdict": "similar",
+          "reply_date": "2023-12-11",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 2,
+          "relevance_rank": 1,
+          "doc_key": "2020-feb-mar/rajya_sabha/s-3763",
+          "sub_question_id": "2020-feb-mar/rajya_sabha/s-3763#s-3763_c",
+          "part_label": "c",
+          "question_text": "(c) The current status of Subansiri hydroelectric project and the reasons for the delay;",
+          "relevance": 1.0,
+          "rerank_logit": 15.9297,
+          "verify_verdict": "similar",
+          "reply_date": "2019-07-31",
+          "retrievers": [
+            "dense",
+            "dense_answer",
+            "entity"
+          ]
+        },
+        {
+          "rank": 3,
+          "relevance_rank": 3,
+          "doc_key": "2026-jan-mar/vidhan_sabha/ubansiri",
+          "sub_question_id": "2026-jan-mar/vidhan_sabha/ubansiri#ubansiri_a",
+          "part_label": "a",
+          "question_text": "(a) What is the status of the Subansiri Hydro-Project and when is it likely to be commissioned?",
+          "relevance": 0.999989,
+          "rerank_logit": 11.375,
+          "verify_verdict": "similar",
+          "reply_date": null,
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        }
+      ],
+      "doc_keys": [
+        "2023-nov-jan/rajya_sabha/s-1443",
+        "2020-feb-mar/rajya_sabha/s-3763",
+        "2026-jan-mar/vidhan_sabha/ubansiri"
+      ]
+    },
+    "seismic monitoring and earthquakes near NHPC dams": {
+      "kind": "direct",
+      "query": "seismic monitoring and earthquakes near NHPC dams",
+      "language": "en",
+      "entities": [
+        "National Hydro Power Company"
+      ],
+      "query_canon": "seismic monitoring and earthquakes near National Hydro Power Company dams",
+      "result_count": 0,
+      "verification_unavailable": false,
+      "verify_checked": 0,
+      "verify_kept": 0,
+      "fuse_candidates": 48,
+      "fuse_top": 0.062175,
+      "fuse_gap": 0.021728,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "elapsed_ms": 1243,
+      "results": [],
+      "doc_keys": []
+    },
+    "NHPC bonds raised on behalf of Ministry of Power": {
+      "kind": "direct",
+      "query": "NHPC bonds raised on behalf of Ministry of Power",
+      "language": "en",
+      "entities": [
+        "National Hydro Power Company",
+        "Ministry of Power"
+      ],
+      "query_canon": "National Hydro Power Company bonds raised on behalf of Ministry of Power",
+      "result_count": 0,
+      "verification_unavailable": false,
+      "verify_checked": 0,
+      "verify_kept": 0,
+      "fuse_candidates": 152,
+      "fuse_top": 0.044703,
+      "fuse_gap": 0.000194,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "elapsed_ms": 1465,
+      "results": [],
+      "doc_keys": []
+    },
+    "Subansiri commissioning schedule": {
+      "kind": "answer",
+      "query": "Subansiri commissioning schedule",
+      "language": "en",
+      "entities": [
+        "Subansiri"
+      ],
+      "query_canon": "Subansiri commissioning schedule",
+      "result_count": 5,
+      "verification_unavailable": false,
+      "verify_checked": 5,
+      "verify_kept": 5,
+      "fuse_candidates": 37,
+      "fuse_top": 0.075422,
+      "fuse_gap": 0.007152,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "elapsed_ms": 1192,
+      "results": [
+        {
+          "rank": 1,
+          "relevance_rank": 3,
+          "doc_key": "2024-nov/rajya_sabha/u-617",
+          "sub_question_id": "2024-nov/rajya_sabha/u-617#u-617_c",
+          "part_label": "c",
+          "question_text": "(c) By when the Subansiri Lower Hydroelectric Project will be completed ; and",
+          "relevance": 0.12013,
+          "rerank_logit": -1.9912,
+          "verify_verdict": "similar",
+          "reply_date": "2024-11-28",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 2,
+          "relevance_rank": 4,
+          "doc_key": "2024-jul/rajya_sabha/u-1233",
+          "sub_question_id": "2024-jul/rajya_sabha/u-1233#u-1233_c",
+          "part_label": "c",
+          "question_text": "(c) By when the Subansiri Lower Hydroelectric Project will be completed ; and",
+          "relevance": 0.12013,
+          "rerank_logit": -1.9912,
+          "verify_verdict": "similar",
+          "reply_date": "2024-08-01",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 3,
+          "relevance_rank": 5,
+          "doc_key": "2023-dec-jan/rajya_sabha/977",
+          "sub_question_id": "2023-dec-jan/rajya_sabha/977#977_c",
+          "part_label": "c",
+          "question_text": "(c) By when the Subansiri Lower Hydroelectric Project will be completed ; and",
+          "relevance": 0.12013,
+          "rerank_logit": -1.9912,
+          "verify_verdict": "similar",
+          "reply_date": "2022-12-15",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 4,
+          "relevance_rank": 2,
+          "doc_key": "2020-feb-mar/rajya_sabha/s-3763",
+          "sub_question_id": "2020-feb-mar/rajya_sabha/s-3763#s-3763_c",
+          "part_label": "c",
+          "question_text": "(c) The current status of Subansiri hydroelectric project and the reasons for the delay;",
+          "relevance": 0.136037,
+          "rerank_logit": -1.8486,
+          "verify_verdict": "similar",
+          "reply_date": "2019-07-31",
+          "retrievers": [
+            "dense",
+            "dense_answer",
+            "entity"
+          ]
+        },
+        {
+          "rank": 5,
+          "relevance_rank": 1,
+          "doc_key": "2026-jan-mar/vidhan_sabha/ubansiri",
+          "sub_question_id": "2026-jan-mar/vidhan_sabha/ubansiri#ubansiri_a",
+          "part_label": "a",
+          "question_text": "(a) What is the status of the Subansiri Hydro-Project and when is it likely to be commissioned?",
+          "relevance": 0.894051,
+          "rerank_logit": 2.1328,
+          "verify_verdict": "similar",
+          "reply_date": null,
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        }
+      ],
+      "doc_keys": [
+        "2024-nov/rajya_sabha/u-617",
+        "2024-jul/rajya_sabha/u-1233",
+        "2023-dec-jan/rajya_sabha/977",
+        "2020-feb-mar/rajya_sabha/s-3763",
+        "2026-jan-mar/vidhan_sabha/ubansiri"
+      ]
+    },
+    "hydro projects in the North East region": {
+      "kind": "answer",
+      "query": "hydro projects in the North East region",
+      "language": "en",
+      "entities": [
+        "North East"
+      ],
+      "query_canon": "hydro projects in the North East region",
+      "result_count": 11,
+      "verification_unavailable": false,
+      "verify_checked": 34,
+      "verify_kept": 11,
+      "fuse_candidates": 120,
+      "fuse_top": 0.073442,
+      "fuse_gap": 0.023501,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "elapsed_ms": 9547,
+      "results": [
+        {
+          "rank": 1,
+          "relevance_rank": 8,
+          "doc_key": "2025-nov-dec/lok_sabha/3071",
+          "sub_question_id": "2025-nov-dec/lok_sabha/3071#3071_a",
+          "part_label": "a",
+          "question_text": "(a) whether the Government has launched any scheme to support the development of hydropower potential in Chhattisgarh, Bihar and North Eastern States;",
+          "relevance": 0.596547,
+          "rerank_logit": 0.3911,
+          "verify_verdict": "similar",
+          "reply_date": "2025-12-18",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 2,
+          "relevance_rank": 10,
+          "doc_key": "2025-nov-dec/rajya_sabha/2314",
+          "sub_question_id": "2025-nov-dec/rajya_sabha/2314#2314_a",
+          "part_label": "a",
+          "question_text": "(a) How does the Ministry envision the synergetic alignment of digital connectivity, hydropower expansion, and skill-development programmes to create a selfrein",
+          "relevance": 0.217499,
+          "rerank_logit": -1.2803,
+          "verify_verdict": "similar",
+          "reply_date": "2025-12-02",
+          "retrievers": [
+            "dense",
+            "dense_answer",
+            "entity"
+          ]
+        },
+        {
+          "rank": 3,
+          "relevance_rank": 3,
+          "doc_key": "2025-feb/rajya_sabha/2780",
+          "sub_question_id": "2025-feb/rajya_sabha/2780#2780_a",
+          "part_label": "a",
+          "question_text": "(a) State-wise details of under construction and proposed major dam projects in Northeast India along with the funds allocated therefor;",
+          "relevance": 0.998918,
+          "rerank_logit": 6.8281,
+          "verify_verdict": "similar",
+          "reply_date": "2025-03-13",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 4,
+          "relevance_rank": 7,
+          "doc_key": "2023-nov-jan/rajya_sabha/s-1443",
+          "sub_question_id": "2023-nov-jan/rajya_sabha/s-1443#s-1443_a",
+          "part_label": "a",
+          "question_text": "(a) What is the present status of Hydropower Project constructed by the NHPC at Gerukamukh in Subansiri River?",
+          "relevance": 0.958069,
+          "rerank_logit": 3.1289,
+          "verify_verdict": "similar",
+          "reply_date": "2023-12-11",
+          "retrievers": [
+            "dense"
+          ]
+        },
+        {
+          "rank": 5,
+          "relevance_rank": 6,
+          "doc_key": "2023-jan-apr/lok_sabha/1894",
+          "sub_question_id": "2023-jan-apr/lok_sabha/1894#1894_a",
+          "part_label": "a",
+          "question_text": "(a) the number of Hydroelectric Projects currently in use in Meghalaya;",
+          "relevance": 0.968142,
+          "rerank_logit": 3.4141,
+          "verify_verdict": "similar",
+          "reply_date": "2023-03-13",
+          "retrievers": [
+            "dense"
+          ]
+        },
+        {
+          "rank": 6,
+          "relevance_rank": 9,
+          "doc_key": "2023-dec-jan/rajya_sabha/u-1330",
+          "sub_question_id": "2023-dec-jan/rajya_sabha/u-1330#u-1330_a",
+          "part_label": "a",
+          "question_text": "(a) The total cost incurred by Government in the construction of the Subansiri Lower Hydroelectric Project located in North Lakhimpur on the border of Assam and",
+          "relevance": 0.579349,
+          "rerank_logit": 0.3201,
+          "verify_verdict": "similar",
+          "reply_date": "2022-12-20",
+          "retrievers": [
+            "dense"
+          ]
+        },
+        {
+          "rank": 7,
+          "relevance_rank": 11,
+          "doc_key": "2022-feb-mar/rajya_sabha/u-3419",
+          "sub_question_id": "2022-feb-mar/rajya_sabha/u-3419#u-3419_a",
+          "part_label": "a",
+          "question_text": "(a) The details of the projects currently ongoing in the North Eastern Region (NER) , State wise along with the amount of funds sanctioned, utilized and propose",
+          "relevance": 0.194364,
+          "rerank_logit": -1.4219,
+          "verify_verdict": "similar",
+          "reply_date": "2022-03-24",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 8,
+          "relevance_rank": 4,
+          "doc_key": "2021-nov-dec/rajya_sabha/u-3143",
+          "sub_question_id": "2021-nov-dec/rajya_sabha/u-3143#u-3143_b",
+          "part_label": "b",
+          "question_text": "(b) the current projects undertaken by Government to increase hydro power generation in Assam; and",
+          "relevance": 0.989552,
+          "rerank_logit": 4.5508,
+          "verify_verdict": "similar",
+          "reply_date": "2021-12-21",
+          "retrievers": [
+            "dense"
+          ]
+        },
+        {
+          "rank": 9,
+          "relevance_rank": 1,
+          "doc_key": "2020-feb-mar/rajya_sabha/s-3763",
+          "sub_question_id": "2020-feb-mar/rajya_sabha/s-3763#s-3763_d",
+          "part_label": "d",
+          "question_text": "(d) The details of steps taken by Government since 2014 for completion of the various hydro projects in the North-East; and",
+          "relevance": 0.999989,
+          "rerank_logit": 11.375,
+          "verify_verdict": "similar",
+          "reply_date": "2019-07-31",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 10,
+          "relevance_rank": 2,
+          "doc_key": "2020-feb-mar/rajya_sabha/6306",
+          "sub_question_id": "2020-feb-mar/rajya_sabha/6306#6306_d",
+          "part_label": "d",
+          "question_text": "(d) The status and new proposal of hydro and other power projects for North-East therein?",
+          "relevance": 0.999989,
+          "rerank_logit": 11.375,
+          "verify_verdict": "similar",
+          "reply_date": null,
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 11,
+          "relevance_rank": 5,
+          "doc_key": "2026-jan-mar/vidhan_sabha/ubansiri",
+          "sub_question_id": "2026-jan-mar/vidhan_sabha/ubansiri#ubansiri_a",
+          "part_label": "a",
+          "question_text": "(a) What is the status of the Subansiri Hydro-Project and when is it likely to be commissioned?",
+          "relevance": 0.968142,
+          "rerank_logit": 3.4141,
+          "verify_verdict": "similar",
+          "reply_date": null,
+          "retrievers": [
+            "dense"
+          ]
+        }
+      ],
+      "doc_keys": [
+        "2025-nov-dec/lok_sabha/3071",
+        "2025-nov-dec/rajya_sabha/2314",
+        "2025-feb/rajya_sabha/2780",
+        "2023-nov-jan/rajya_sabha/s-1443",
+        "2023-jan-apr/lok_sabha/1894",
+        "2023-dec-jan/rajya_sabha/u-1330",
+        "2022-feb-mar/rajya_sabha/u-3419",
+        "2021-nov-dec/rajya_sabha/u-3143",
+        "2020-feb-mar/rajya_sabha/s-3763",
+        "2020-feb-mar/rajya_sabha/6306",
+        "2026-jan-mar/vidhan_sabha/ubansiri"
+      ]
+    },
+    "Teesta projects in Sikkim": {
+      "kind": "answer",
+      "query": "Teesta projects in Sikkim",
+      "language": "en",
+      "entities": [
+        "Sikkim"
+      ],
+      "query_canon": "Teesta projects in Sikkim",
+      "result_count": 2,
+      "verification_unavailable": false,
+      "verify_checked": 7,
+      "verify_kept": 2,
+      "fuse_candidates": 50,
+      "fuse_top": 0.052522,
+      "fuse_gap": 0.002564,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "elapsed_ms": 1640,
+      "results": [
+        {
+          "rank": 1,
+          "relevance_rank": 2,
+          "doc_key": "2023-nov-jan/rajya_sabha/s-4182",
+          "sub_question_id": "2023-nov-jan/rajya_sabha/s-4182#s-4182_a",
+          "part_label": "a",
+          "question_text": "(a) Whether it is fact that NHPC's State-run hydro power has suffered a huge loss due to flash floods in its Teesta-VI hydro power project in north east region ",
+          "relevance": 0.242743,
+          "rerank_logit": -1.1377,
+          "verify_verdict": "similar",
+          "reply_date": "2023-12-19",
+          "retrievers": [
+            "dense",
+            "dense_answer",
+            "entity"
+          ]
+        },
+        {
+          "rank": 2,
+          "relevance_rank": 1,
+          "doc_key": "2023-dec-jan/lok_sabha/8561",
+          "sub_question_id": "2023-dec-jan/lok_sabha/8561#8561_a",
+          "part_label": "a",
+          "question_text": "a) Whether the MoU was signed between the Government of Sikkim and NHPC for Teesta Stage-IV Hydroelectric Project and if so, the details thereof;",
+          "relevance": 0.999386,
+          "rerank_logit": 7.3945,
+          "verify_verdict": "similar",
+          "reply_date": "2022-12-22",
+          "retrievers": [
+            "dense",
+            "dense_answer",
+            "entity"
+          ]
+        }
+      ],
+      "doc_keys": [
+        "2023-nov-jan/rajya_sabha/s-4182",
+        "2023-dec-jan/lok_sabha/8561"
+      ]
+    },
+    "dam safety and seismic design": {
+      "kind": "boilerplate",
+      "query": "dam safety and seismic design",
+      "language": "en",
+      "entities": [],
+      "query_canon": "dam safety and seismic design",
+      "result_count": 0,
+      "verification_unavailable": false,
+      "verify_checked": 0,
+      "verify_kept": 0,
+      "fuse_candidates": 31,
+      "fuse_top": 0.057669,
+      "fuse_gap": 0.004849,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer"
+      ],
+      "elapsed_ms": 1447,
+      "results": [],
+      "doc_keys": []
+    },
+    "matters to be replied by Ministry of Power": {
+      "kind": "boilerplate",
+      "query": "matters to be replied by Ministry of Power",
+      "language": "en",
+      "entities": [
+        "Ministry of Power"
+      ],
+      "query_canon": "matters to be replied by Ministry of Power",
+      "result_count": 0,
+      "verification_unavailable": false,
+      "verify_checked": 42,
+      "verify_kept": 0,
+      "fuse_candidates": 146,
+      "fuse_top": 0.047945,
+      "fuse_gap": 0.01087,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "elapsed_ms": 17450,
+      "results": [],
+      "doc_keys": []
+    },
+    "information given at annexure": {
+      "kind": "boilerplate",
+      "query": "information given at annexure",
+      "language": "en",
+      "entities": [],
+      "query_canon": "information given at annexure",
+      "result_count": 0,
+      "verification_unavailable": false,
+      "verify_checked": 0,
+      "verify_kept": 0,
+      "fuse_candidates": 56,
+      "fuse_top": 0.031901,
+      "fuse_gap": 0.005255,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer"
+      ],
+      "elapsed_ms": 1999,
+      "results": [],
+      "doc_keys": []
+    },
+    "projects in HP": {
+      "kind": "paraphrase",
+      "query": "projects in HP",
+      "language": "en",
+      "entities": [
+        "Himachal Pradesh"
+      ],
+      "query_canon": "projects in Himachal Pradesh",
+      "result_count": 8,
+      "verification_unavailable": false,
+      "verify_checked": 17,
+      "verify_kept": 8,
+      "fuse_candidates": 64,
+      "fuse_top": 0.047167,
+      "fuse_gap": 0.014095,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "elapsed_ms": 2335,
+      "results": [
+        {
+          "rank": 1,
+          "relevance_rank": 7,
+          "doc_key": "2026-jan-mar/rajya_sabha/5012",
+          "sub_question_id": "2026-jan-mar/rajya_sabha/5012#5012_a",
+          "part_label": "a",
+          "question_text": "(a) What is the estimated cost of the Dugar Hydro Electric Project at Killar in Chamba district and by when this project would be completed;",
+          "relevance": 0.488902,
+          "rerank_logit": -0.0444,
+          "verify_verdict": "similar",
+          "reply_date": "2026-03-30",
+          "retrievers": [
+            "dense"
+          ]
+        },
+        {
+          "rank": 2,
+          "relevance_rank": 1,
+          "doc_key": "2025-feb/rajya_sabha/s-258",
+          "sub_question_id": "2025-feb/rajya_sabha/s-258#s-258_a",
+          "part_label": "a",
+          "question_text": "(a) How many power projects have been sanctioned in Himachal Pradesh;",
+          "relevance": 0.999996,
+          "rerank_logit": 12.5156,
+          "verify_verdict": "similar",
+          "reply_date": "2025-02-03",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 3,
+          "relevance_rank": 2,
+          "doc_key": "2024-nov/rajya_sabha/u-1590",
+          "sub_question_id": "2024-nov/rajya_sabha/u-1590#u-1590_c",
+          "part_label": "c",
+          "question_text": "(c) whether it is a fact that many power projects are pending at present, if so, the reasons therefor alongwith the State-wise details of approved and pending p",
+          "relevance": 0.999989,
+          "rerank_logit": 11.375,
+          "verify_verdict": "similar",
+          "reply_date": "2024-12-09",
+          "retrievers": [
+            "dense"
+          ]
+        },
+        {
+          "rank": 4,
+          "relevance_rank": 3,
+          "doc_key": "2024-jul/lok_sabha/7545",
+          "sub_question_id": "2024-jul/lok_sabha/7545#7545_b",
+          "part_label": "b",
+          "question_text": "(b) The details of the proposals for new dams which are still pending in Himachal Pradesh along with their current status?",
+          "relevance": 0.999803,
+          "rerank_logit": 8.5312,
+          "verify_verdict": "similar",
+          "reply_date": "2024-08-12",
+          "retrievers": [
+            "dense"
+          ]
+        },
+        {
+          "rank": 5,
+          "relevance_rank": 4,
+          "doc_key": "2023-nov-jan/lok_sabha/5152",
+          "sub_question_id": "2023-nov-jan/lok_sabha/5152#5152_a",
+          "part_label": "a",
+          "question_text": "(a) whether the Government has received a proposal from the Government of Himachal Pradesh to increase the royalty in central hydropower projects i.e. NHPC, NTP",
+          "relevance": 0.944997,
+          "rerank_logit": 2.8438,
+          "verify_verdict": "similar",
+          "reply_date": "2023-08-22",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 6,
+          "relevance_rank": 6,
+          "doc_key": "2023-jul-aug/rajya_sabha/2794",
+          "sub_question_id": "2023-jul-aug/rajya_sabha/2794#2794_a",
+          "part_label": "a",
+          "question_text": "(a) whether a loan from the International Bank for Reconstruction and Development has been approved to facilitate power sector reforms in Himachal Pradesh;",
+          "relevance": 0.566258,
+          "rerank_logit": 0.2666,
+          "verify_verdict": "similar",
+          "reply_date": "2023-08-08",
+          "retrievers": [
+            "dense",
+            "entity"
+          ]
+        },
+        {
+          "rank": 7,
+          "relevance_rank": 5,
+          "doc_key": "2023-dec-jan/rajya_sabha/s-2404",
+          "sub_question_id": "2023-dec-jan/rajya_sabha/s-2404#s-2404_a",
+          "part_label": "a",
+          "question_text": "a) The estimated cost of Dugar Hydroelectric Project, located in Chamba district of Himachal Pradesh and the units of electricity that would be generated annual",
+          "relevance": 0.654776,
+          "rerank_logit": 0.6401,
+          "verify_verdict": "similar",
+          "reply_date": "2022-12-20",
+          "retrievers": [
+            "dense",
+            "entity"
+          ]
+        },
+        {
+          "rank": 8,
+          "relevance_rank": 8,
+          "doc_key": "2022-feb-mar/rajya_sabha/u-1893",
+          "sub_question_id": "2022-feb-mar/rajya_sabha/u-1893#u-1893_a",
+          "part_label": "a",
+          "question_text": "(a) the number of times Solar Energy Corporation of India Ltd. raised its bid for 15 MW grid connected floating solar power in Himachal Pradesh which is propose",
+          "relevance": 0.394891,
+          "rerank_logit": -0.4268,
+          "verify_verdict": "similar",
+          "reply_date": "2022-04-05",
+          "retrievers": [
+            "entity"
+          ]
+        }
+      ],
+      "doc_keys": [
+        "2026-jan-mar/rajya_sabha/5012",
+        "2025-feb/rajya_sabha/s-258",
+        "2024-nov/rajya_sabha/u-1590",
+        "2024-jul/lok_sabha/7545",
+        "2023-nov-jan/lok_sabha/5152",
+        "2023-jul-aug/rajya_sabha/2794",
+        "2023-dec-jan/rajya_sabha/s-2404",
+        "2022-feb-mar/rajya_sabha/u-1893"
+      ]
+    },
+    "projects in Himachal Pradesh": {
+      "kind": "paraphrase",
+      "query": "projects in Himachal Pradesh",
+      "language": "en",
+      "entities": [
+        "Himachal Pradesh"
+      ],
+      "query_canon": "projects in Himachal Pradesh",
+      "result_count": 8,
+      "verification_unavailable": false,
+      "verify_checked": 17,
+      "verify_kept": 8,
+      "fuse_candidates": 64,
+      "fuse_top": 0.047167,
+      "fuse_gap": 0.014095,
+      "retrievers_eligible": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "retrievers_fired": [
+        "dense",
+        "dense_answer",
+        "entity"
+      ],
+      "elapsed_ms": 1590,
+      "results": [
+        {
+          "rank": 1,
+          "relevance_rank": 7,
+          "doc_key": "2026-jan-mar/rajya_sabha/5012",
+          "sub_question_id": "2026-jan-mar/rajya_sabha/5012#5012_a",
+          "part_label": "a",
+          "question_text": "(a) What is the estimated cost of the Dugar Hydro Electric Project at Killar in Chamba district and by when this project would be completed;",
+          "relevance": 0.488902,
+          "rerank_logit": -0.0444,
+          "verify_verdict": "similar",
+          "reply_date": "2026-03-30",
+          "retrievers": [
+            "dense"
+          ]
+        },
+        {
+          "rank": 2,
+          "relevance_rank": 1,
+          "doc_key": "2025-feb/rajya_sabha/s-258",
+          "sub_question_id": "2025-feb/rajya_sabha/s-258#s-258_a",
+          "part_label": "a",
+          "question_text": "(a) How many power projects have been sanctioned in Himachal Pradesh;",
+          "relevance": 0.999996,
+          "rerank_logit": 12.5156,
+          "verify_verdict": "similar",
+          "reply_date": "2025-02-03",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 3,
+          "relevance_rank": 2,
+          "doc_key": "2024-nov/rajya_sabha/u-1590",
+          "sub_question_id": "2024-nov/rajya_sabha/u-1590#u-1590_c",
+          "part_label": "c",
+          "question_text": "(c) whether it is a fact that many power projects are pending at present, if so, the reasons therefor alongwith the State-wise details of approved and pending p",
+          "relevance": 0.999989,
+          "rerank_logit": 11.375,
+          "verify_verdict": "similar",
+          "reply_date": "2024-12-09",
+          "retrievers": [
+            "dense"
+          ]
+        },
+        {
+          "rank": 4,
+          "relevance_rank": 3,
+          "doc_key": "2024-jul/lok_sabha/7545",
+          "sub_question_id": "2024-jul/lok_sabha/7545#7545_b",
+          "part_label": "b",
+          "question_text": "(b) The details of the proposals for new dams which are still pending in Himachal Pradesh along with their current status?",
+          "relevance": 0.999803,
+          "rerank_logit": 8.5312,
+          "verify_verdict": "similar",
+          "reply_date": "2024-08-12",
+          "retrievers": [
+            "dense"
+          ]
+        },
+        {
+          "rank": 5,
+          "relevance_rank": 4,
+          "doc_key": "2023-nov-jan/lok_sabha/5152",
+          "sub_question_id": "2023-nov-jan/lok_sabha/5152#5152_a",
+          "part_label": "a",
+          "question_text": "(a) whether the Government has received a proposal from the Government of Himachal Pradesh to increase the royalty in central hydropower projects i.e. NHPC, NTP",
+          "relevance": 0.944997,
+          "rerank_logit": 2.8438,
+          "verify_verdict": "similar",
+          "reply_date": "2023-08-22",
+          "retrievers": [
+            "dense",
+            "dense_answer"
+          ]
+        },
+        {
+          "rank": 6,
+          "relevance_rank": 6,
+          "doc_key": "2023-jul-aug/rajya_sabha/2794",
+          "sub_question_id": "2023-jul-aug/rajya_sabha/2794#2794_a",
+          "part_label": "a",
+          "question_text": "(a) whether a loan from the International Bank for Reconstruction and Development has been approved to facilitate power sector reforms in Himachal Pradesh;",
+          "relevance": 0.566258,
+          "rerank_logit": 0.2666,
+          "verify_verdict": "similar",
+          "reply_date": "2023-08-08",
+          "retrievers": [
+            "dense",
+            "entity"
+          ]
+        },
+        {
+          "rank": 7,
+          "relevance_rank": 5,
+          "doc_key": "2023-dec-jan/rajya_sabha/s-2404",
+          "sub_question_id": "2023-dec-jan/rajya_sabha/s-2404#s-2404_a",
+          "part_label": "a",
+          "question_text": "a) The estimated cost of Dugar Hydroelectric Project, located in Chamba district of Himachal Pradesh and the units of electricity that would be generated annual",
+          "relevance": 0.654776,
+          "rerank_logit": 0.6401,
+          "verify_verdict": "similar",
+          "reply_date": "2022-12-20",
+          "retrievers": [
+            "dense",
+            "entity"
+          ]
+        },
+        {
+          "rank": 8,
+          "relevance_rank": 8,
+          "doc_key": "2022-feb-mar/rajya_sabha/u-1893",
+          "sub_question_id": "2022-feb-mar/rajya_sabha/u-1893#u-1893_a",
+          "part_label": "a",
+          "question_text": "(a) the number of times Solar Energy Corporation of India Ltd. raised its bid for 15 MW grid connected floating solar power in Himachal Pradesh which is propose",
+          "relevance": 0.394891,
+          "rerank_logit": -0.4268,
+          "verify_verdict": "similar",
+          "reply_date": "2022-04-05",
+          "retrievers": [
+            "entity"
+          ]
+        }
+      ],
+      "doc_keys": [
+        "2026-jan-mar/rajya_sabha/5012",
+        "2025-feb/rajya_sabha/s-258",
+        "2024-nov/rajya_sabha/u-1590",
+        "2024-jul/lok_sabha/7545",
+        "2023-nov-jan/lok_sabha/5152",
+        "2023-jul-aug/rajya_sabha/2794",
+        "2023-dec-jan/rajya_sabha/s-2404",
+        "2022-feb-mar/rajya_sabha/u-1893"
+      ]
+    }
+  }
+}

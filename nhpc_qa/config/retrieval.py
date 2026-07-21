@@ -120,6 +120,27 @@ class Phase4Config(Phase3Config):
     rrf_weight_keyword: float = field(default_factory=lambda: _env_float("RRF_W_KEYWORD", 0.7))
     rrf_weight_entity:  float = field(default_factory=lambda: _env_float("RRF_W_ENTITY", 0.5))
 
+    # ─── ANSWER-EMBEDDING EXPERIMENT (additive, OFF by default) ───────────────
+    # When TRUE, dense retrieval ALSO searches answer_group embeddings (migration 020): a
+    # record can be retrieved because its QUESTION matched OR its ANSWER matched. The answer
+    # hit is mapped back to the sub_question(s) linked to that answer_group and fused into the
+    # SAME candidate set as a THIRD retriever ("dense_answer"), deduped by doc_key. Everything
+    # downstream (rerank query-vs-question, sigmoid, LLM verify, date order) is unchanged.
+    #
+    # ⚠️ FALSE MUST REPRODUCE CURRENT BEHAVIOUR EXACTLY. ⚠️ When off, the answer retriever is
+    # never run and never imported into the hot path, and fusion sees only dense+entity.
+    #
+    # ANSWER_EMBED_WEIGHT is the RRF weight of the answer signal — deliberately MODEST by
+    # default (below dense's 1.0) so the answer signal boosts recall without letting shared
+    # answer boilerplate dominate the fused order. ANSWER_TOP_N bounds the answer groups
+    # scanned before expansion to sub-questions.
+    use_answer_embeddings: bool = field(
+        default_factory=lambda: _env_bool("USE_ANSWER_EMBEDDINGS", False))
+    answer_top_n: int = field(
+        default_factory=lambda: _env_int("RETRIEVE_ANSWER_TOP_N", 30))
+    answer_embed_weight: float = field(
+        default_factory=lambda: _env_float("ANSWER_EMBED_WEIGHT", 0.5))
+
     # --- WIDEN branch (CHANGE 3 + 4) -----------------------------------------
     # RRF SCORES ARE NOT ON A 0-1 SCALE. With rrf_k=60, one retriever at rank 1
     # contributes weight/(60+1): dense 0.0164, keyword 0.0115, entity 0.0082. Scores
@@ -240,6 +261,11 @@ class Phase4Config(Phase3Config):
             errs.append(f"RRF_K must be positive, got {self.rrf_k}")
         if self.widen_top_n_factor < 2:
             errs.append("WIDEN_TOP_N_FACTOR must be >= 2 or WIDEN cannot broaden anything")
+        if self.use_answer_embeddings:
+            if self.answer_embed_weight < 0:
+                errs.append(f"ANSWER_EMBED_WEIGHT must be >= 0, got {self.answer_embed_weight}")
+            if self.answer_top_n <= 0:
+                errs.append(f"RETRIEVE_ANSWER_TOP_N must be positive, got {self.answer_top_n}")
         return errs
 
     def describe(self) -> dict:
@@ -253,6 +279,9 @@ class Phase4Config(Phase3Config):
             "rrf_weights": {"dense": self.rrf_weight_dense,
                             "keyword": self.rrf_weight_keyword,
                             "entity": self.rrf_weight_entity},
+            "use_answer_embeddings": self.use_answer_embeddings,
+            "answer_embed_weight": self.answer_embed_weight,
+            "answer_top_n": self.answer_top_n,
             "widen": {"enabled": self.widen_enabled, "tau": self.widen_tau,
                       "delta": self.widen_delta, "top_n_factor": self.widen_top_n_factor},
             "rerank_enabled": self.rerank_enabled,

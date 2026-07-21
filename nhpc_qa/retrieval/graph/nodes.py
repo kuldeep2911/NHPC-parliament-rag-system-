@@ -140,9 +140,22 @@ def hybrid_retrieve(state, deps):
                                 house=house, session=session, nhpc_only=nhpc_only),
     }
 
+    # ANSWER-EMBEDDING EXPERIMENT (config-gated). When USE_ANSWER_EMBEDDINGS is TRUE, dense
+    # retrieval ALSO searches answer_group embeddings; each answer hit is expanded to the
+    # sub_question(s) linked to that answer_group (dense_answer.search returns exactly the
+    # dense.search shape, keyed by sub_question_id/doc_key), so fusion dedups it by doc_key
+    # against the question hits. When FALSE this block is skipped entirely and the module is
+    # not even imported -- retrieval is byte-for-byte the current dense+entity behaviour.
+    if getattr(cfg, "use_answer_embeddings", False):
+        from nhpc_qa.retrieval.search import dense_answer
+        retrieved["dense_answer"] = dense_answer.search(
+            conn, state["query_vec"], cfg.answer_top_n * factor,
+            house=house, session=session, nhpc_only=nhpc_only)
+
     _timed(state, "retrieve_widened" if widened else "retrieve", t0)
-    log.info("hybrid_retrieve(widened=%s, factor=%d): dense=%d entity=%d",
-             widened, factor, len(retrieved["dense"]), len(retrieved["entity"]))
+    log.info("hybrid_retrieve(widened=%s, factor=%d): dense=%d entity=%d answer=%d",
+             widened, factor, len(retrieved["dense"]), len(retrieved["entity"]),
+             len(retrieved.get("dense_answer") or []))
     return {"retrieved": retrieved}
 
 
@@ -166,6 +179,11 @@ def fuse_results(state, deps):
     eligible = {"dense"}
     if state.get("entity_ids"):
         eligible.add("entity")
+    # answer-embedding experiment: the answer retriever is eligible whenever the flag is on
+    # (it can always run -- every active answer group is embedded). Off -> never eligible,
+    # never in result_lists, so agreement is scored exactly as before.
+    if getattr(cfg, "use_answer_embeddings", False):
+        eligible.add("dense_answer")
     fired = {r for r in eligible if retrieved.get(r)}
 
     fused, stats = fuse.fuse(retrieved, cfg, eligible, fired)

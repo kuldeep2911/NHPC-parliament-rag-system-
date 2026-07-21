@@ -50,6 +50,10 @@ def fuse(result_lists, cfg, eligible, fired):
         "dense": cfg.rrf_weight_dense,
         "keyword": cfg.rrf_weight_keyword,
         "entity": cfg.rrf_weight_entity,
+        # answer-embedding experiment: only present when USE_ANSWER_EMBEDDINGS put a
+        # "dense_answer" list in result_lists. Deliberately modest (default 0.5) so the
+        # answer signal lifts recall without letting shared answer boilerplate dominate.
+        "dense_answer": getattr(cfg, "answer_embed_weight", 0.0),
     }
     k = cfg.rrf_k
 
