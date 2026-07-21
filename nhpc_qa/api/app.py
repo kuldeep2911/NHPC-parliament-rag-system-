@@ -388,6 +388,27 @@ def main():
     finally:
         probe.close()
 
+    # AUTO-START THE WATCHER alongside the UI (WATCHER_WITH_SERVE, default on). It runs in a
+    # daemon background thread using the SAME runner.main as `nhpc watch`, so incremental sync
+    # begins the moment the server starts -- no separate process to launch. Any failure to
+    # start is caught inside start_watcher_thread and only logged; the UI is never blocked or
+    # crashed by the watcher. (Watcher ko UI ke saath hi chala dete hain: wahi runner.main
+    # ek daemon thread me, isliye server start hote hi incremental sync chalu. Koi bhi
+    # dikkat sirf log hoti hai — UI kabhi nahi rukti.)
+    if getattr(cfg, "watcher_with_serve", False):
+        try:
+            from nhpc_qa.watcher.runner import start_watcher_thread
+            start_watcher_thread()
+        except Exception as e:      # noqa: BLE001 -- watcher must never block serving the UI
+            logging.getLogger("nhpc.phase4.api").warning(
+                "could not start the background watcher (%s: %s) — the UI is serving anyway; "
+                "run `nhpc watch` separately if you need incremental sync",
+                type(e).__name__, e)
+    else:
+        logging.getLogger("nhpc.phase4.api").info(
+            "WATCHER_WITH_SERVE=false — not starting the watcher here; run `nhpc watch` "
+            "separately for incremental sync")
+
     print(f"\n  Officer UI: http://{cfg.api_host}:{cfg.api_port}\n")
     uvicorn.run("nhpc_qa.api.app:app", host=cfg.api_host, port=cfg.api_port)
     return 0

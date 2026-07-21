@@ -353,9 +353,21 @@ def main(args=None):
         log.info("shutting down (signal)")
         _STOP.set()
 
-    signal.signal(signal.SIGINT, _stop)
-    if hasattr(signal, "SIGTERM"):
-        signal.signal(signal.SIGTERM, _stop)
+    # Signal handlers can ONLY be installed from the main thread of the main interpreter --
+    # Python raises ValueError otherwise. When the watcher runs standalone (`nhpc watch`) it
+    # IS the main thread, so we register them. But when it is launched in a BACKGROUND THREAD
+    # alongside the API (`serve` with WATCHER_WITH_SERVE=true), it is not the main thread, so
+    # we skip registration and let the host process (uvicorn) own signals; shutdown then
+    # happens via _STOP, which stop_watcher_thread() sets. (Signal handlers sirf main thread
+    # par lag sakte hain; jab watcher API ke saath background thread me chalta hai to yeh skip
+    # kar dete hain aur shutdown _STOP se hota hai.)
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGINT, _stop)
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, _stop)
+    else:
+        log.info("watcher started in a background thread — signal handlers left to the host "
+                 "process; stop via _STOP")
 
     log.info("watching %s | settle=%ss poll=%ss | soft-delete only (purge is separate)",
              source, cfg.watch_settle_seconds, cfg.watch_poll_seconds)
@@ -402,3 +414,58 @@ def main(args=None):
         observer.join(timeout=5)
     log.info("watcher stopped")
     return 0
+
+
+# ---------------------------------------------------------------------------
+# background-thread launcher — used by `serve` so the UI auto-runs the watcher
+# ---------------------------------------------------------------------------
+
+_BG_THREAD = None
+
+
+def start_watcher_thread(args=None):
+    """
+    Start the SAME watcher (runner.main) in a daemon background thread and return it.
+    Used by `nhpc serve` so that starting the UI also starts the incremental sync, without a
+    second process. Idempotent: if a watcher thread is already alive it is returned as-is.
+
+    (Wahi watcher — runner.main — ko ek daemon background thread me chala kar return karta
+    hai. `nhpc serve` isse call karta hai taaki UI start karne par incremental sync bhi apne
+    aap chalu ho jaaye, alag process ki zaroorat ke bina. Idempotent hai: agar thread pehle
+    se zinda hai to wahi laut jaata hai.)
+
+    Daemon = true, so the thread cannot keep the process alive after the API exits. Any
+    startup failure inside main() is caught here and logged — it must NEVER take down the UI.
+    (daemon isliye taaki API band hone par process atka na rahe. main() ke andar koi bhi
+    failure yahin pakad kar log karte hain — UI kabhi girni nahi chahiye.)
+    """
+    global _BG_THREAD
+    if _BG_THREAD is not None and _BG_THREAD.is_alive():
+        log.info("watcher thread already running")
+        return _BG_THREAD
+
+    _STOP.clear()
+
+    def _run():
+        try:
+            main(args)
+        except Exception:      # noqa: BLE001 -- a watcher failure must not crash the API
+            log.exception("watcher background thread crashed — the UI is unaffected")
+
+    _BG_THREAD = threading.Thread(target=_run, name="nhpc-watcher", daemon=True)
+    _BG_THREAD.start()
+    log.info("watcher launched in background thread alongside the API")
+    return _BG_THREAD
+
+
+def stop_watcher_thread(timeout=5):
+    """
+    Signal the background watcher to stop and wait briefly for it. Safe to call even if no
+    watcher thread was started. (Background watcher ko rukne ka signal deta hai aur thoda
+    intezaar karta hai. Agar koi thread start hi nahi hua tha to bhi call karna safe hai.)
+    """
+    global _BG_THREAD
+    _STOP.set()
+    if _BG_THREAD is not None:
+        _BG_THREAD.join(timeout=timeout)
+        _BG_THREAD = None

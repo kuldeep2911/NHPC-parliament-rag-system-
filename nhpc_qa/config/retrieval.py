@@ -135,7 +135,7 @@ class Phase4Config(Phase3Config):
     # answer boilerplate dominate the fused order. ANSWER_TOP_N bounds the answer groups
     # scanned before expansion to sub-questions.
     use_answer_embeddings: bool = field(
-        default_factory=lambda: _env_bool("USE_ANSWER_EMBEDDINGS", False))
+        default_factory=lambda: _env_bool("USE_ANSWER_EMBEDDINGS", True))
     answer_top_n: int = field(
         default_factory=lambda: _env_int("RETRIEVE_ANSWER_TOP_N", 30))
     answer_embed_weight: float = field(
@@ -206,6 +206,17 @@ class Phase4Config(Phase3Config):
     langfuse_secret_key_env: str = field(default_factory=lambda: _env("LANGFUSE_SECRET_KEY_ENV", "LANGFUSE_SECRET_KEY"))
 
     # --- WATCHER / incremental sync -----------------------------------------
+    # AUTO-START WITH THE UI. When true (default), `nhpc serve` also launches the watcher in
+    # a background daemon thread, so starting the officer UI automatically starts incremental
+    # sync -- no second `nhpc watch` process to remember. Set WATCHER_WITH_SERVE=false to run
+    # them separately (e.g. the watcher on a different host). A watcher failure never affects
+    # the UI: it is caught and logged, and the API keeps serving.
+    # (Jab true ho — jo default hai — to `nhpc serve` watcher ko background daemon thread me
+    # bhi chala deta hai, isliye UI start karte hi incremental sync apne aap chalu ho jaata
+    # hai; alag `nhpc watch` process yaad rakhne ki zaroorat nahi. Alag chalane ke liye
+    # WATCHER_WITH_SERVE=false karein. Watcher fail ho to bhi UI par asar nahi padta.)
+    watcher_with_serve: bool = field(
+        default_factory=lambda: _env_bool("WATCHER_WITH_SERVE", True))
     # The ORIGINAL source tree the watcher observes. READ-ONLY: the watcher never writes
     # into it; the crawl stage copies OUT of it into organized/.
     source_root: str = field(default_factory=lambda: _env("NHPC_SOURCE_ROOT", "Original Data"))
