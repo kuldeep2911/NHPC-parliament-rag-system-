@@ -52,31 +52,44 @@ def query_process(state, deps):
     # PROCESSING ONLY -- see the module docstring. Never a retrieval filter.
     language = "hi" if _DEVANAGARI.search(q) else "en"
 
-    # Canonicalise the query's entity mentions against the SAME dictionary used at index
-    # time. Two things use the result:
-    #   1. entity_ids -> the entity retriever (a record linked to himachal_pradesh matches
-    #      whether the query said "HP" or "Himachal Pradesh").
-    #   2. a CANONICALISED query STRING -> dense embedding + reranking. "projects in HP" is
-    #      rewritten to "projects in Himachal Pradesh" before it is embedded, so the dense
-    #      neighbourhood and the reranker score are the SAME for both surface forms. Without
-    #      this the entity signal agreed but dense/rerank still read the raw text ("HP"
-    #      embeds only 0.63 like "Himachal Pradesh"), and the final SETS diverged. Measured.
-    # It is deterministic (dictionary lookup, no LLM) and never filters by language.
+    # Canonicalise the query against the SAME dictionary used at index time. Deterministic
+    # (dictionary lookups, no LLM); never filters by language. The output q_canon feeds the
+    # dense embedding, the reranker, the LLM verify AND the verify cache key — so every
+    # phrasing that canonicalises to the same string gets the SAME results end to end.
+    #
+    # ORDER MATTERS (measured on the 100-question harness, 13/16 paraphrase groups diverged
+    # before this ordering):
+    #   STEP 1: entity match on the RAW text — aliases were mined from raw corpus surface
+    #           forms, so they must see the query as typed ("HP", "J&K", "PSUs").
+    #   STEP 2: entity canonicalisation. "HP" -> "Himachal Pradesh".
+    #   STEP 3: concept synonyms, with the canonical entity names PROTECTED — otherwise
+    #           "hydroelectric"->"hydro power" would rewrite the inside of "Subansiri Lower
+    #           Hydroelectric Project" and corrupt the entity form.
+    #   STEP 4: filler strip — "list of", "all", "give me" wrappers carry no intent but
+    #           shift the embedding enough to split the dense pool ("all hydro projects in
+    #           HP" returned 1 result, "hydro projects in HP" returned 3). Stripped LAST so
+    #           it can never eat part of an entity name or synonym phrase.
     from nhpc_qa.entities import dictionary as _edict
 
-    # STEP 1: context-synonym expansion. "ongoing hydro projects" -> "under construction
-    # hydro projects" (and other domain synonyms), so two phrasings of the SAME question
-    # become the SAME string and therefore embed and rerank IDENTICALLY -> same results. The
-    # embedding model already reads them as ~0.91 similar; this closes the last gap
-    # deterministically. Applied FIRST, so entity matching + embedding both see the
-    # normalised text.
-    q_syn = _edict.apply_synonyms(q, deps.get("synonym_map") or {})
+    alias_map = deps.get("alias_map") or {}
+    matched = _edict.match_entities(q, alias_map)
+    q_ent = _edict.canonicalise_text(q, matched)
 
-    # STEP 2: entity canonicalisation. "HP" -> "Himachal Pradesh".
-    matched = _edict.match_entities(q_syn, deps.get("alias_map") or {})
+    q_syn = _edict.apply_synonyms(q_ent, deps.get("synonym_map") or {},
+                                  protected=[m["canonical"] for m in matched])
+
+    q_canon = _edict.strip_filler(q_syn)
+
+    # STEP 5: RE-match on the final canonical text and UNION with the raw-text matches.
+    # A synonym rewrite can surface an entity the raw text hid: "in the country" -> "in
+    # India" makes the India entity matchable, so "potential in the country" and
+    # "potential in India" fire the SAME entity retriever — without this, their dense text
+    # agreed but the entity signal still split the sets.
+    for m2 in _edict.match_entities(q_canon, alias_map):
+        if m2["entity_id"] not in {m["entity_id"] for m in matched}:
+            matched.append(m2)
     entity_ids = [m["entity_id"] for m in matched]
     entities = [m["canonical"] for m in matched]
-    q_canon = _edict.canonicalise_text(q_syn, matched)
 
     query_vec = deps["embedder"].embed_queries([q_canon])[0]
 
@@ -272,6 +285,25 @@ def verify(state, deps):
                                          cfg.safety_max_results)
     log.info("sigmoid_filter: %d candidates, %d passed >= %.3f, %d dropped",
              len(reranked), len(kept), cfg.similarity_threshold, sig_dropped)
+
+    # PLATEAU GUARD — a deterministic generic-query check on the SHAPE of the scores.
+    # A stock fragment ("the reasons therefor") ties dozens of candidates near sigmoid 1.0;
+    # no real question does that. Returning those 20 "matches" would be noise wearing a
+    # relevance score, and the LLM verify cannot reliably reject literal text matches. So
+    # the set is emptied HERE, with an explicit flag the API/UI surfaces as "this query is
+    # too generic — name a subject", rather than showing confident nonsense.
+    is_plateau, plateau_info = V.plateau_guard(kept, cfg)
+    if is_plateau:
+        log.info("plateau_guard: generic query suspected (%s) — returning 0 of %d",
+                 plateau_info, len(kept))
+        _timed(state, "verify", t0)
+        return {"reranked": [], "sigmoid_dropped": sig_dropped,
+                "generic_query_suspected": True,
+                "verify_meta": {"enabled": bool(cfg.llm_verify_enabled),
+                                "unavailable": False, "ms": 0,
+                                "checked": len(kept), "kept": 0,
+                                "plateau": plateau_info},
+                "verification_unavailable": False}
 
     verify_meta = {"enabled": bool(cfg.llm_verify_enabled), "unavailable": False,
                    "ms": 0, "checked": 0, "kept": len(kept)}

@@ -653,12 +653,16 @@ function render(d) {
   if (!n) {
     // HONEST EMPTY STATE — a real answer, not an error and not a blank list. For a
     // contradiction-checker, "this has not been asked before" is useful information.
+    const generic = d.generic_query_suspected
+      ? `<div class="d"><b>This query looks like a generic fragment</b> (a stock phrase like
+           “the reasons therefor”). Add the actual subject — a project, a state, a scheme —
+           and search again.</div>` : "";
     $("#out").innerHTML = `<div class="empty"><div class="big">🔍</div>`
-      + `<div class="t">No similar past questions found.</div>`
+      + `<div class="t">No result found.</div>`
       + `<div class="d">Nothing on record is a genuine match for this question`
       + (g.verify_enabled && !d.verification_unavailable
          ? ` — retrieval surfaced candidates, but none passed similarity verification.` : `.`)
-      + `</div></div>`;
+      + `</div>` + generic + `</div>`;
     return;
   }
 

@@ -76,6 +76,39 @@ def sigmoid_filter(reranked: list, threshold: float, safety_max: int):
     return kept, dropped
 
 
+def plateau_guard(kept: list, cfg):
+    """
+    Deterministic generic-query detection from the SHAPE of the reranked scores.
+
+    A real question peaks: one or a few strong matches, then a drop. A generic fragment
+    ("the reasons therefor", "details thereof") PLATEAUS: the stock phrase appears verbatim
+    in hundreds of past sub-questions, so dozens of candidates tie near sigmoid 1.0 and the
+    reranker cannot prefer any of them — there is nothing to prefer.
+
+    Measured on this corpus: "details thereof" produced 45 candidates above 0.9; "the
+    reasons therefor" kept 12 at >= 0.986. The strongest REAL frequent topic (Subansiri)
+    produced 10 above 0.9 WITH a clear leader. The guard therefore requires BOTH a wide
+    plateau (>= plateau_min_n above 0.9) AND a saturated top (the plateau_min_n-th best
+    sigmoid still >= plateau_min_sigmoid) — a real topic fails the second test because its
+    tail decays.
+
+    Returns (is_plateau, info). The caller decides what to do; this only measures.
+    """
+    if not getattr(cfg, "plateau_guard_enabled", False):
+        return False, {}
+    n_min = max(4, int(getattr(cfg, "plateau_min_n", 12)))
+    sig_min = float(getattr(cfg, "plateau_min_sigmoid", 0.97))
+    sigs = sorted((c.get("relevance") for c in kept
+                   if c.get("relevance") is not None), reverse=True)
+    wide = sum(1 for s in sigs if s > 0.9)
+    if wide < n_min or len(sigs) < n_min:
+        return False, {"wide": wide}
+    nth = sigs[n_min - 1]
+    if nth >= sig_min:
+        return True, {"wide": wide, "nth_sigmoid": round(nth, 4), "n_min": n_min}
+    return False, {"wide": wide, "nth_sigmoid": round(nth, 4)}
+
+
 # ---------------------------------------------------------------------------
 # LLM verification
 # ---------------------------------------------------------------------------
@@ -92,6 +125,15 @@ Judge the UNDERLYING ASK, not the wording:
   one asks about seismic safety and the other about power generation -> not_similar.)
 - Generic boilerplate that matches everything ("details thereof", "steps taken") is NOT a
   real match to a specific question -> not_similar.
+- If the NEW question is ITSELF such a generic fragment — a stock sub-part with no specific
+  subject of its own ("the reasons therefor", "if so the details thereof", "steps taken by
+  the government") — then NO past question is a genuine match, even one with identical
+  wording: matching boilerplate to boilerplate retrieves nothing an officer can use. Mark
+  ALL not_similar.
+- The NEW question may be a SHORT TOPIC QUERY rather than a full parliamentary question
+  ("Kishanganga project status", "Salal power generation"). Treat it as the underlying ask:
+  a past question that directly asks about that topic IS similar. Do not reject a real
+  topical match just because the new query is terse.
 
 Return STRICT JSON only, an array with one entry per past question, in order:
 [{"id": <the number>, "verdict": "similar" | "not_similar", "reason": "<one short clause>"}]

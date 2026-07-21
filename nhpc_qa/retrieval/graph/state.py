@@ -44,6 +44,10 @@ class QueryState(TypedDict, total=False):
     sigmoid_dropped: int         # candidates cut by the sigmoid recall-filter
     verify_meta: dict            # {enabled, unavailable, checked, kept, ms, reason}
     verification_unavailable: bool  # the LLM verify pass could not run -> results unverified
+    generic_query_suspected: bool   # plateau guard emptied the set: query is a stock
+    #                                 fragment ("the reasons therefor") — UI says "too
+    #                                 generic", not "no results". (Was silently dropped
+    #                                 before this declaration — same lesson as verify_meta.)
 
     # --- node 5: assemble ----------------------------------------------------
     results: list                # the display payload the officer sees

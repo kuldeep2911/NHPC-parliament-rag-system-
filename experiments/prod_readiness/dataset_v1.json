@@ -1,0 +1,733 @@
+{
+  "name": "NHPC production-readiness question dataset",
+  "version": "1.0",
+  "created": "2026-07-21",
+  "total": 100,
+  "by_kind": {
+    "paraphrase": 45,
+    "direct": 40,
+    "hindi": 5,
+    "boilerplate": 5,
+    "out_of_domain": 5
+  },
+  "paraphrase_groups": [
+    "g01_jk",
+    "g02_dues",
+    "g03_subansiri",
+    "g04_uc",
+    "g05_vacancy",
+    "g06_csr",
+    "g07_hp",
+    "g08_recruit",
+    "g09_teesta",
+    "g10_dpr",
+    "g11_wb",
+    "g12_discom",
+    "g13_potential",
+    "g14_chamera",
+    "g15_transmission",
+    "g16_hi_subansiri"
+  ],
+  "questions": [
+    {
+      "id": "q001",
+      "kind": "paraphrase",
+      "group": "g01_jk",
+      "lines": 1,
+      "text": "projects in J&K"
+    },
+    {
+      "id": "q002",
+      "kind": "paraphrase",
+      "group": "g01_jk",
+      "lines": 1,
+      "text": "all projects in J&K"
+    },
+    {
+      "id": "q003",
+      "kind": "paraphrase",
+      "group": "g01_jk",
+      "lines": 1,
+      "text": "projects in Jammu and Kashmir"
+    },
+    {
+      "id": "q004",
+      "kind": "paraphrase",
+      "group": "g02_dues",
+      "lines": 1,
+      "text": "electricity dues in Jammu and Kashmir"
+    },
+    {
+      "id": "q005",
+      "kind": "paraphrase",
+      "group": "g02_dues",
+      "lines": 1,
+      "text": "outstanding electricity dues in J&K"
+    },
+    {
+      "id": "q006",
+      "kind": "paraphrase",
+      "group": "g02_dues",
+      "lines": 1,
+      "text": "electricity dues owed in Jammu and Kashmir"
+    },
+    {
+      "id": "q007",
+      "kind": "paraphrase",
+      "group": "g03_subansiri",
+      "lines": 1,
+      "text": "status of Subansiri Lower project"
+    },
+    {
+      "id": "q008",
+      "kind": "paraphrase",
+      "group": "g03_subansiri",
+      "lines": 1,
+      "text": "current status of Subansiri Lower project"
+    },
+    {
+      "id": "q009",
+      "kind": "paraphrase",
+      "group": "g03_subansiri",
+      "lines": 1,
+      "text": "present status of the Subansiri Lower hydroelectric project"
+    },
+    {
+      "id": "q010",
+      "kind": "paraphrase",
+      "group": "g04_uc",
+      "lines": 1,
+      "text": "under construction hydro projects"
+    },
+    {
+      "id": "q011",
+      "kind": "paraphrase",
+      "group": "g04_uc",
+      "lines": 1,
+      "text": "ongoing hydro projects"
+    },
+    {
+      "id": "q012",
+      "kind": "paraphrase",
+      "group": "g04_uc",
+      "lines": 1,
+      "text": "all ongoing hydro projects"
+    },
+    {
+      "id": "q013",
+      "kind": "paraphrase",
+      "group": "g05_vacancy",
+      "lines": 1,
+      "text": "vacant posts in NHPC"
+    },
+    {
+      "id": "q014",
+      "kind": "paraphrase",
+      "group": "g05_vacancy",
+      "lines": 1,
+      "text": "vacancies in NHPC"
+    },
+    {
+      "id": "q015",
+      "kind": "paraphrase",
+      "group": "g05_vacancy",
+      "lines": 1,
+      "text": "number of vacant posts in NHPC"
+    },
+    {
+      "id": "q016",
+      "kind": "paraphrase",
+      "group": "g06_csr",
+      "lines": 1,
+      "text": "CSR expenditure of NHPC"
+    },
+    {
+      "id": "q017",
+      "kind": "paraphrase",
+      "group": "g06_csr",
+      "lines": 1,
+      "text": "CSR spending of NHPC"
+    },
+    {
+      "id": "q018",
+      "kind": "paraphrase",
+      "group": "g06_csr",
+      "lines": 1,
+      "text": "NHPC expenditure on corporate social responsibility"
+    },
+    {
+      "id": "q019",
+      "kind": "paraphrase",
+      "group": "g07_hp",
+      "lines": 1,
+      "text": "hydro projects in Himachal Pradesh"
+    },
+    {
+      "id": "q020",
+      "kind": "paraphrase",
+      "group": "g07_hp",
+      "lines": 1,
+      "text": "hydro projects in HP"
+    },
+    {
+      "id": "q021",
+      "kind": "paraphrase",
+      "group": "g07_hp",
+      "lines": 1,
+      "text": "all hydro projects in Himachal Pradesh"
+    },
+    {
+      "id": "q022",
+      "kind": "paraphrase",
+      "group": "g08_recruit",
+      "lines": 1,
+      "text": "recruitment in PSUs"
+    },
+    {
+      "id": "q023",
+      "kind": "paraphrase",
+      "group": "g08_recruit",
+      "lines": 1,
+      "text": "recruitment in public sector undertakings"
+    },
+    {
+      "id": "q024",
+      "kind": "paraphrase",
+      "group": "g08_recruit",
+      "lines": 1,
+      "text": "new recruitments in PSUs"
+    },
+    {
+      "id": "q025",
+      "kind": "paraphrase",
+      "group": "g09_teesta",
+      "lines": 1,
+      "text": "Teesta projects in Sikkim"
+    },
+    {
+      "id": "q026",
+      "kind": "paraphrase",
+      "group": "g09_teesta",
+      "lines": 1,
+      "text": "Teesta hydro projects in Sikkim"
+    },
+    {
+      "id": "q027",
+      "kind": "paraphrase",
+      "group": "g09_teesta",
+      "lines": 1,
+      "text": "all Teesta projects in Sikkim"
+    },
+    {
+      "id": "q028",
+      "kind": "paraphrase",
+      "group": "g10_dpr",
+      "lines": 1,
+      "text": "DPRs approved by CEA"
+    },
+    {
+      "id": "q029",
+      "kind": "paraphrase",
+      "group": "g10_dpr",
+      "lines": 1,
+      "text": "detailed project reports approved by CEA"
+    },
+    {
+      "id": "q030",
+      "kind": "paraphrase",
+      "group": "g10_dpr",
+      "lines": 1,
+      "text": "DPRs approved by Central Electricity Authority"
+    },
+    {
+      "id": "q031",
+      "kind": "paraphrase",
+      "group": "g11_wb",
+      "lines": 1,
+      "text": "power projects in West Bengal"
+    },
+    {
+      "id": "q032",
+      "kind": "paraphrase",
+      "group": "g11_wb",
+      "lines": 1,
+      "text": "ongoing power projects in West Bengal"
+    },
+    {
+      "id": "q033",
+      "kind": "paraphrase",
+      "group": "g11_wb",
+      "lines": 1,
+      "text": "details of ongoing power projects in West Bengal"
+    },
+    {
+      "id": "q034",
+      "kind": "paraphrase",
+      "group": "g12_discom",
+      "lines": 1,
+      "text": "dues of DISCOMs to power generating companies"
+    },
+    {
+      "id": "q035",
+      "kind": "paraphrase",
+      "group": "g12_discom",
+      "lines": 1,
+      "text": "outstanding dues of DISCOMs to generating companies"
+    },
+    {
+      "id": "q036",
+      "kind": "paraphrase",
+      "group": "g12_discom",
+      "lines": 1,
+      "text": "DISCOM dues to power generation companies"
+    },
+    {
+      "id": "q037",
+      "kind": "paraphrase",
+      "group": "g13_potential",
+      "lines": 1,
+      "text": "hydropower potential in India"
+    },
+    {
+      "id": "q038",
+      "kind": "paraphrase",
+      "group": "g13_potential",
+      "lines": 1,
+      "text": "hydel power potential in the country"
+    },
+    {
+      "id": "q039",
+      "kind": "paraphrase",
+      "group": "g13_potential",
+      "lines": 1,
+      "text": "hydro electric potential in India"
+    },
+    {
+      "id": "q040",
+      "kind": "paraphrase",
+      "group": "g14_chamera",
+      "lines": 2,
+      "text": "rehabilitation of families displaced by Chamera project in Chamba"
+    },
+    {
+      "id": "q041",
+      "kind": "paraphrase",
+      "group": "g14_chamera",
+      "lines": 2,
+      "text": "resettlement of families displaced by the Chamera project in Chamba district"
+    },
+    {
+      "id": "q042",
+      "kind": "paraphrase",
+      "group": "g14_chamera",
+      "lines": 2,
+      "text": "rehabilitation of people displaced by NHPC Chamera project Chamba"
+    },
+    {
+      "id": "q043",
+      "kind": "paraphrase",
+      "group": "g15_transmission",
+      "lines": 1,
+      "text": "transmission lines added in the last five years"
+    },
+    {
+      "id": "q044",
+      "kind": "paraphrase",
+      "group": "g15_transmission",
+      "lines": 1,
+      "text": "circuit kilometres of transmission lines added in last five years"
+    },
+    {
+      "id": "q045",
+      "kind": "paraphrase",
+      "group": "g15_transmission",
+      "lines": 1,
+      "text": "transmission line kilometres added in the past five years"
+    },
+    {
+      "id": "q046",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "seismic monitoring near NHPC dams"
+    },
+    {
+      "id": "q047",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "NHPC bonds raised on behalf of Ministry of Power"
+    },
+    {
+      "id": "q048",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "joint ventures of NHPC"
+    },
+    {
+      "id": "q049",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "Kishanganga project status"
+    },
+    {
+      "id": "q050",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "power supplied to Delhi by NHPC"
+    },
+    {
+      "id": "q051",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "renovation and modernisation of hydro power stations in Maharashtra"
+    },
+    {
+      "id": "q052",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "flood control measures in Himalayan states"
+    },
+    {
+      "id": "q053",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "pumped storage projects under construction"
+    },
+    {
+      "id": "q054",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "battery energy storage capacity required by 2026-27"
+    },
+    {
+      "id": "q055",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "hydro projects in Arunachal Pradesh"
+    },
+    {
+      "id": "q056",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "NHPC profit and dividend paid to the government"
+    },
+    {
+      "id": "q057",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "contractual employees versus regular employees in PSUs"
+    },
+    {
+      "id": "q058",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "Parbati hydroelectric project commissioning"
+    },
+    {
+      "id": "q059",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "solar projects under implementation by NHPC"
+    },
+    {
+      "id": "q060",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "land acquisition for hydro projects in Sikkim"
+    },
+    {
+      "id": "q061",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "Salal hydroelectric project power generation"
+    },
+    {
+      "id": "q062",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "Uri power station performance"
+    },
+    {
+      "id": "q063",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "Dulhasti power station generation"
+    },
+    {
+      "id": "q064",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "NHPC acquisition of Lanco Teesta Hydro Power"
+    },
+    {
+      "id": "q065",
+      "kind": "direct",
+      "group": null,
+      "lines": 1,
+      "text": "tariff of hydro power compared to solar power"
+    },
+    {
+      "id": "q066",
+      "kind": "direct",
+      "group": null,
+      "lines": 2,
+      "text": "whether the Government has reviewed the implementation of hydro projects in the North East and if so the main reasons for the delays"
+    },
+    {
+      "id": "q067",
+      "kind": "direct",
+      "group": null,
+      "lines": 2,
+      "text": "the number of hydroelectric projects currently under construction in the country along with their expected completion timelines"
+    },
+    {
+      "id": "q068",
+      "kind": "direct",
+      "group": null,
+      "lines": 2,
+      "text": "whether any hydro power stations were covered under the renovation and modernisation programme and the additional capacity gained"
+    },
+    {
+      "id": "q069",
+      "kind": "direct",
+      "group": null,
+      "lines": 2,
+      "text": "the details of project proposals sent by the state of Manipur and the amount sanctioned in the last three years"
+    },
+    {
+      "id": "q070",
+      "kind": "direct",
+      "group": null,
+      "lines": 2,
+      "text": "the steps taken by the Government to mitigate the increase of natural disasters in sensitive areas of Himalayan states"
+    },
+    {
+      "id": "q071",
+      "kind": "direct",
+      "group": null,
+      "lines": 2,
+      "text": "whether expected quantum of electricity is not being generated through hydel power despite huge potential in the country"
+    },
+    {
+      "id": "q072",
+      "kind": "direct",
+      "group": null,
+      "lines": 2,
+      "text": "the details of new dams whose proposals are still pending in Himachal Pradesh along with their current status"
+    },
+    {
+      "id": "q073",
+      "kind": "direct",
+      "group": null,
+      "lines": 2,
+      "text": "the number of people belonging to landless families affected under the NHPC Chamera-III project in Chamba district"
+    },
+    {
+      "id": "q074",
+      "kind": "direct",
+      "group": null,
+      "lines": 2,
+      "text": "whether the power generating companies have moved to Supreme Court to recover their dues from DISCOMs"
+    },
+    {
+      "id": "q075",
+      "kind": "direct",
+      "group": null,
+      "lines": 2,
+      "text": "the details of the compensation paid to the families displaced by hydroelectric projects in Jammu and Kashmir"
+    },
+    {
+      "id": "q076",
+      "kind": "direct",
+      "group": null,
+      "lines": 3,
+      "text": "whether the Government proposes to set up new hydroelectric power projects in the North Eastern region during the next five years and if so the details thereof along with the estimated capacity and investment involved state-wise"
+    },
+    {
+      "id": "q077",
+      "kind": "direct",
+      "group": null,
+      "lines": 3,
+      "text": "the total installed capacity of hydro power in the country at present and the steps taken by the Government to increase the share of hydro power in the total energy mix over the coming years"
+    },
+    {
+      "id": "q078",
+      "kind": "direct",
+      "group": null,
+      "lines": 3,
+      "text": "whether NHPC has signed any memorandum of understanding with state governments for the development of hydroelectric projects and if so the details of the projects proposed under the said MoUs"
+    },
+    {
+      "id": "q079",
+      "kind": "direct",
+      "group": null,
+      "lines": 3,
+      "text": "the details of funds allocated and utilised for the rehabilitation and resettlement of families affected by hydroelectric projects during the last three years project-wise and state-wise"
+    },
+    {
+      "id": "q080",
+      "kind": "direct",
+      "group": null,
+      "lines": 3,
+      "text": "whether instances of landslides and floods have increased in the districts of Darjeeling and Kalimpong and if so whether the Ministry has taken note of the impact on hydro projects in the region"
+    },
+    {
+      "id": "q081",
+      "kind": "direct",
+      "group": null,
+      "lines": 3,
+      "text": "the number of Detailed Project Reports for hydro projects approved by the Central Electricity Authority in the last ten years along with the present status of each such project"
+    },
+    {
+      "id": "q082",
+      "kind": "direct",
+      "group": null,
+      "lines": 3,
+      "text": "whether the Government has any proposal to revive the stalled or stressed hydroelectric projects in the country and if so the details of the projects identified and the financial assistance proposed"
+    },
+    {
+      "id": "q083",
+      "kind": "direct",
+      "group": null,
+      "lines": 3,
+      "text": "the quantum of power generated by NHPC power stations during each of the last three years station-wise and the revenue earned from the sale of such power during the said period"
+    },
+    {
+      "id": "q084",
+      "kind": "direct",
+      "group": null,
+      "lines": 3,
+      "text": "whether the environmental clearances for hydroelectric projects in the Himalayan region are being reviewed in the light of recent natural disasters and if so the details of the projects affected"
+    },
+    {
+      "id": "q085",
+      "kind": "direct",
+      "group": null,
+      "lines": 3,
+      "text": "the steps taken or being taken by the Union Government to complete the ongoing hydroelectric projects in a time bound manner and the mechanism put in place to monitor the progress of these projects"
+    },
+    {
+      "id": "q086",
+      "kind": "hindi",
+      "group": "g16_hi_subansiri",
+      "lines": 1,
+      "text": "सुबनसिरी परियोजना की स्थिति"
+    },
+    {
+      "id": "q087",
+      "kind": "hindi",
+      "group": "g16_hi_subansiri",
+      "lines": 1,
+      "text": "सुबनसिरी लोअर परियोजना की वर्तमान स्थिति"
+    },
+    {
+      "id": "q088",
+      "kind": "hindi",
+      "group": null,
+      "lines": 1,
+      "text": "जल विद्युत परियोजनाओं से विस्थापित परिवारों का पुनर्वास"
+    },
+    {
+      "id": "q089",
+      "kind": "hindi",
+      "group": null,
+      "lines": 1,
+      "text": "हिमाचल प्रदेश में जल विद्युत परियोजनाएं"
+    },
+    {
+      "id": "q090",
+      "kind": "hindi",
+      "group": null,
+      "lines": 1,
+      "text": "एनएचपीसी की निर्माणाधीन परियोजनाएं"
+    },
+    {
+      "id": "q091",
+      "kind": "boilerplate",
+      "group": null,
+      "lines": 1,
+      "text": "if so the details thereof"
+    },
+    {
+      "id": "q092",
+      "kind": "boilerplate",
+      "group": null,
+      "lines": 1,
+      "text": "steps taken by the government"
+    },
+    {
+      "id": "q093",
+      "kind": "boilerplate",
+      "group": null,
+      "lines": 1,
+      "text": "the reasons therefor"
+    },
+    {
+      "id": "q094",
+      "kind": "boilerplate",
+      "group": null,
+      "lines": 1,
+      "text": "details thereof and if not the reasons therefor"
+    },
+    {
+      "id": "q095",
+      "kind": "boilerplate",
+      "group": null,
+      "lines": 1,
+      "text": "may be replied by Ministry of Power"
+    },
+    {
+      "id": "q096",
+      "kind": "out_of_domain",
+      "group": null,
+      "lines": 1,
+      "text": "railway station redevelopment scheme"
+    },
+    {
+      "id": "q097",
+      "kind": "out_of_domain",
+      "group": null,
+      "lines": 1,
+      "text": "income tax slab rates for salaried employees"
+    },
+    {
+      "id": "q098",
+      "kind": "out_of_domain",
+      "group": null,
+      "lines": 1,
+      "text": "minimum support price for wheat"
+    },
+    {
+      "id": "q099",
+      "kind": "out_of_domain",
+      "group": null,
+      "lines": 1,
+      "text": "Ayushman Bharat hospital empanelment"
+    },
+    {
+      "id": "q100",
+      "kind": "out_of_domain",
+      "group": null,
+      "lines": 1,
+      "text": "semiconductor fabrication plant incentives"
+    }
+  ]
+}

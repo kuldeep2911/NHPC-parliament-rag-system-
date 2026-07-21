@@ -41,20 +41,49 @@ def sha256_of(path: str) -> str:
     return h.hexdigest()
 
 
+import re as _re
+
+_NUMBERED_ATTR = _re.compile(r"^\s*\d{1,2}\s+[A-Za-z]")   # "1 Design Energy (MUs)"
+
+
 def _table_orientation(grid) -> str:
     """
-    'transposed' when the FIRST COLUMN looks like a list of attribute names and the header
-    row looks like entity names -- the UC-projects layout, where PROJECTS ARE COLUMNS.
+    'transposed' when the layout puts ENTITIES AS COLUMNS and attributes as rows -- the
+    UC-projects layout ("S.N | Name of Project | Subansiri Lower | Dibang | ..." across the
+    top, "1 Design Energy (MUs)" down the side).
 
     Heuristic, and it only sets a HINT the draft prompt passes to the LLM; it never rewrites
     the data. Getting it wrong costs a prompt hint, not a figure.
+
+    TWO SIGNALS (measured on the live corpus, where the old text-heavy-first-column test
+    misread the UC-projects table as 'rows'):
+      1. TITLE SPILL: a scanned banner title repeats into every header cell ("SALIENT
+         DETAILS - ..." x14). A header of near-identical long cells is a title, not column
+         names -- and that layout is the transposed one.
+      2. NUMBERED ATTRIBUTES down column 0 of the data rows ("1 Design Energy", "2 Date of
+         sanction"): attributes are enumerated down the side only in a transposed table.
+    The old text-heavy-first-column signal is kept as the fallback.
     """
     if len(grid) < 3 or (grid and len(grid[0]) < 3):
         return "rows"
-    # transposed tables tend to have a tall, narrow shape with text-heavy first column
-    first_col = [(_r[0] or "") for _r in grid if _r]
+
+    header = [str(c or "").strip() for c in grid[0]]
+    non_empty = [c for c in header if c]
+    # signal 1: title spill — most header cells identical and long
+    if len(non_empty) >= 3:
+        from collections import Counter
+        top_cell, n_same = Counter(non_empty).most_common(1)[0]
+        if n_same >= max(3, 0.6 * len(non_empty)) and len(top_cell) > 30:
+            return "transposed"
+
+    # signal 2: numbered attribute labels down the first column of the data rows
+    first_col = [str(r[0] or "").strip() for r in grid[1:] if r]
+    numbered = sum(1 for c in first_col if _NUMBERED_ATTR.match(c))
+    if numbered >= max(3, 0.5 * len(first_col)):
+        return "transposed"
+
+    # fallback: text-heavy first column
     texty = sum(1 for c in first_col if c and not _looks_numeric(c))
-    # attribute-labels down the side: most of the first column is non-numeric text
     return "transposed" if texty >= max(3, 0.7 * len(first_col)) else "rows"
 
 
@@ -70,11 +99,25 @@ def _looks_numeric(s: str) -> bool:
 
 
 def _nl_render(grid) -> str:
-    """Flatten a table to a natural-language block the LLM can read. Whole cells; no loss."""
+    """
+    Flatten a table to a natural-language block the LLM can read. Whole cells; no loss.
+
+    UNLABELED COLUMNS ARE MARKED, NOT LEFT BLANK. Scanned headers drop cells: the live
+    financial digest's header came out " |  | 2024-25 | 2023-24 |  |  | (₹ in Crores)" --
+    three year columns with NO label. Rendered as-is, the model has to GUESS which year a
+    figure belongs to, and a guessed year in a parliamentary draft is exactly the failure
+    this system exists to prevent. An explicit "(col N: label missing)" placeholder tells
+    the model the label is unknown, so it can say so instead of inventing one.
+    """
     if not grid:
         return ""
-    header = grid[0]
-    lines = [" | ".join(str(c or "") for c in header)]
+    header = [str(c or "").strip() for c in grid[0]]
+    non_empty = sum(1 for c in header if c)
+    # only patch headers that are PARTIALLY labelled — a fully blank first row is data
+    if 0 < non_empty < len(header):
+        header = [c if c else f"(col {i + 1}: label missing)"
+                  for i, c in enumerate(header)]
+    lines = [" | ".join(header)]
     for row in grid[1:]:
         lines.append(" | ".join(str(c or "") for c in row))
     return "\n".join(lines)

@@ -167,7 +167,7 @@ def load_synonym_map(conn) -> dict:
         return {}
 
 
-def apply_synonyms(text: str, synonym_map: dict) -> str:
+def apply_synonyms(text: str, synonym_map: dict, protected: list | None = None) -> str:
     """
     Rewrite every context-synonym in `text` to its canonical representative, so "ongoing
     hydro projects" and "under construction hydro projects" become the SAME string and
@@ -175,10 +175,28 @@ def apply_synonyms(text: str, synonym_map: dict) -> str:
 
     Longest phrase first (so "under construction stage" wins over "under construction"),
     word-boundary, case-insensitive. Deterministic; no LLM at query time.
+
+    `protected` — phrases that must NOT be rewritten (canonical ENTITY names already placed
+    in the text). Without this, a synonym like "hydroelectric"→"hydro" would rewrite the
+    inside of "Subansiri Lower Hydroelectric Project" and break the canonical entity form
+    the retriever and reranker rely on. Protected spans are swapped for placeholders during
+    the rewrite and restored after.
     """
     if not text or not synonym_map:
         return text
     out = text
+
+    # shield the canonical entity names from the synonym regexes
+    placeholders = {}
+    for i, phrase in enumerate(sorted(set(protected or []), key=len, reverse=True)):
+        if not (phrase or "").strip():
+            continue
+        token = f"⟦E{i}⟧"          # ⟦E0⟧ — never occurs in real queries
+        pat = re.compile(re.escape(phrase), re.IGNORECASE)
+        if pat.search(out):
+            out = pat.sub(token, out)
+            placeholders[token] = phrase
+
     for phrase in sorted(synonym_map, key=len, reverse=True):
         canon = synonym_map[phrase]
         if normalise(phrase) == normalise(canon):
@@ -188,7 +206,70 @@ def apply_synonyms(text: str, synonym_map: dict) -> str:
             continue
         pat = r"\b" + r"[\s.\-]*".join(parts) + r"\b"
         out = re.sub(pat, canon, out, flags=re.IGNORECASE)
+
+    for token, phrase in placeholders.items():
+        out = out.replace(token, phrase)
     return re.sub(r"\s+", " ", out).strip()
+
+
+# ---------------------------------------------------------------------------
+# FILLER STRIP — low-information wrappers that change the embedding but not the ask
+# ---------------------------------------------------------------------------
+# Measured on the 100-question harness: "all hydro projects in HP" returned 1 result while
+# "hydro projects in HP" returned 3; "list of ongoing..." vs "ongoing..." similarly split.
+# These wrappers carry no retrieval intent — an officer asking "all X" wants X. Stripping
+# them deterministically makes every wrapped phrasing embed EXACTLY like the bare one.
+#
+# ⚠️ CONSERVATIVE BY DESIGN. Only phrases that are pure request-wrappers are here. Words
+# that narrow meaning ("new", "pending", "current") are NOT stripped — they change the ask.
+_FILLER_LEADING = [
+    # request wrappers an officer types before the real question
+    "please provide", "kindly provide", "provide", "give me", "give",
+    "list of all", "a list of", "list of", "list",
+    "details of all", "the details of", "details of", "details regarding",
+    "information about", "information on", "information regarding",
+    "what is the", "what are the", "what is", "what are",
+    "tell me about", "tell me",
+    # "number of X" asks for X's count — the count lives in the SAME answers X does, so
+    # for retrieval the wrapper only shifts the embedding ("number of vacant posts in
+    # NHPC" split from "vacant posts in NHPC" on the harness)
+    "the total number of", "total number of", "the number of", "number of",
+]
+# "all projects in J&K" == "projects in J&K"; articles never carry retrieval intent and
+# their presence measurably split paraphrase sets ("status of the X" vs "status of X").
+_FILLER_ANYWHERE = ["all", "the", "an", "a"]
+
+_LEAD_RE = re.compile(
+    r"^(?:" + "|".join(re.escape(p) for p in
+                       sorted(_FILLER_LEADING, key=len, reverse=True)) + r")\s+",
+    re.IGNORECASE)
+_ANY_RES = [re.compile(r"\b" + re.escape(w) + r"\b\s*", re.IGNORECASE)
+            for w in _FILLER_ANYWHERE]
+
+
+def strip_filler(text: str) -> str:
+    """
+    Remove request-wrapper filler so paraphrases collapse to one canonical ask.
+    "list of all ongoing projects in J&K" -> "ongoing projects in J&K".
+
+    Applied AFTER entity canonicalisation and synonyms (so it never eats part of an entity
+    name) and ONLY for retrieval-side processing — the officer's original text is preserved
+    everywhere it is displayed. Never empties the query: if stripping would leave nothing,
+    the original text is returned.
+    """
+    if not (text or "").strip():
+        return text
+    out = text.strip()
+    # peel leading wrappers repeatedly ("please provide the details of ...")
+    for _ in range(4):
+        new = _LEAD_RE.sub("", out).strip()
+        if new == out:
+            break
+        out = new
+    for pat in _ANY_RES:
+        out = pat.sub("", out)
+    out = re.sub(r"\s+", " ", out).strip(" ,.:;-")
+    return out if out else text
 
 
 def canonicalise_text(text: str, matched: list) -> str:
@@ -210,12 +291,16 @@ def canonicalise_text(text: str, matched: list) -> str:
         canon = m.get("canonical") or ""
         if not surface or not canon:
             continue
-        # the surface is normalised (spaces for dots/dashes); build a flexible pattern that
-        # matches the original punctuation ("H.P." / "H P" / "HP" for surface "h p").
-        parts = [re.escape(tok) for tok in surface.split(" ") if tok]
-        if not parts:
+        # the surface is normalised (spaces for dots/dashes, '&' -> ' and '); build a
+        # flexible pattern that matches the original punctuation: "H.P." / "H P" / "HP" for
+        # surface "h p", and "J&K" / "J and K" / "JK" for surface "j and k". The token
+        # "and" is matched as (?:and|&)? because normalise() created it FROM an ampersand —
+        # the original text may hold "and", "&", or nothing at all.
+        toks = [t for t in surface.split(" ") if t]
+        if not toks:
             continue
-        pat = r"\b" + r"[\s.\-]*".join(parts) + r"\b"
+        parts = [r"(?:and|&)?" if t == "and" else re.escape(t) for t in toks]
+        pat = r"\b" + r"[\s.\-&]*".join(parts) + r"\b"
         out = re.sub(pat, canon, out, flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", out).strip()
 

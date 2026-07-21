@@ -244,6 +244,10 @@ def query(payload: dict = Body(...), who=Depends(identity)):
         # True when the LLM verify pass could not run -- the results are the sigmoid set,
         # UNVERIFIED. The UI surfaces this; it is not an error.
         "verification_unavailable": bool(out.get("verification_unavailable")),
+        # True when the plateau guard emptied the set: the query looks like a generic
+        # fragment ("the reasons therefor") that ties dozens of candidates at ~1.0. The UI
+        # should say "this query is too generic — name a subject", not "no results".
+        "generic_query_suspected": bool(out.get("generic_query_suspected")),
         "draft": out.get("draft"),           # None unless generation is enabled
         "diagnostics": {
             "_note": "confidence signals are HEURISTICS for triage, not correctness",

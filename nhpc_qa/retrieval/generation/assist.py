@@ -123,7 +123,8 @@ _SYSTEM_WITH_SUPPORTING = _SYSTEM.rstrip('"') + """
 ═══ SUPPORTING DOCUMENTS — additional rules when they are provided ═══
 
 The officer has also selected SUPPORTING DOCUMENTS: NHPC's current internal data (financial
-digests, project progress, CSR). You may use their facts too, under these rules:
+digests, project progress, CSR). The officer attached them because they carry the CURRENT
+facts. Use them under these rules:
 
 A. TWO KINDS OF SOURCE, NEVER CONFLATED.
    - A PAST PARLIAMENTARY REPLY is what NHPC already told Parliament. Cite it as before:
@@ -147,6 +148,16 @@ D. CONTRADICTIONS ARE THE POINT — SURFACE THEM. If a supporting document's CUR
    honestly in the draft ("NHPC's reply of <date> stated X; the current progress report as
    on <date> shows Y"). Do NOT smooth it into confident prose and do NOT silently prefer one.
    This is the most important thing you do here.
+
+E. USING A RELEVANT DOCUMENT IS MANDATORY, NOT OPTIONAL. If a supporting document contains
+   data that bears on the question (a status, a figure, a schedule, a project list), the
+   draft MUST carry that CURRENT data, cited to the document with its as-of date — the past
+   replies supply history and format; the attached document supplies the present. NEVER
+   answer a "current status / when will / how much now" question from an old reply alone
+   while a newer attached document covers it: that puts a stale figure into a parliamentary
+   draft while the correct one sits unused. Only if a document genuinely has nothing on the
+   question, say exactly that in `gaps` (e.g. {"part": "", "reason": "attached financial
+   digest has no data on <topic>"}) so the officer knows it was considered, not ignored.
 
 Add this array to your JSON (may be empty):
 
@@ -393,6 +404,50 @@ def _empty_parts_become_gaps(obj):
         log.info("draft: %d empty part(s) moved to gaps", len(moved))
 
 
+def _flag_unused_docs(obj, supporting):
+    """
+    DOC USAGE IS VERIFIED IN CODE, NOT TRUSTED (same discipline as citations).
+
+    Measured failure (harness d06/d08): the progress report was attached, contained the
+    answer (commissioning schedule, the J&K project list), and the model built the draft
+    from old replies alone — a stale date went into the draft while the current one sat
+    unused. Rule E tells the model not to; this makes the lapse VISIBLE when it happens
+    anyway: any attached document that is neither cited anywhere nor explicitly declared
+    irrelevant in `gaps` is flagged, and the flag reaches the officer.
+
+    Returns the list of unused citation ids (also stored on the draft as `docs_unused`).
+    """
+    if not supporting:
+        return []
+    cited = set()
+    for p in (obj.get("parts") or []) + (obj.get("key_points") or []):
+        cited.update(p.get("cites") or [])
+    for c in obj.get("contradictions") or []:
+        cited.add(str(c.get("current_cite") or ""))
+        cited.add(str(c.get("past_cite") or ""))
+    gap_text = " ".join((g.get("reason") or "") for g in obj.get("gaps") or []).lower()
+
+    unused = []
+    for s in supporting:
+        cite = _sup_cite(s)
+        name = (s.get("display_name") or "").lower()
+        mentioned_in_gaps = (cite.lower() in gap_text
+                             or (name and name[:25] in gap_text)
+                             or "supporting document" in gap_text
+                             or "attached" in gap_text)
+        if cite not in cited and not mentioned_in_gaps:
+            unused.append(cite)
+            (obj.setdefault("gaps", [])).append({
+                "part": "",
+                "reason": (f"attached document \"{s.get('display_name')}\" was not used "
+                           f"in this draft — check it manually for current figures on "
+                           f"this subject"),
+            })
+            log.warning("draft: attached doc %s was neither cited nor declared "
+                        "irrelevant — flagged", cite)
+    return unused
+
+
 def build_draft(cfg, llm, query: str, results: list, run_id: str | None = None,
                 supporting: list | None = None, officer_prompt: str | None = None) -> dict:
     """
@@ -468,6 +523,7 @@ def build_draft(cfg, llm, query: str, results: list, run_id: str | None = None,
 
     dropped = _verify_cites(obj, allowed)
     _empty_parts_become_gaps(obj)
+    docs_unused = _flag_unused_docs(obj, supporting)
 
     # The full record of what the draft was built from, so an officer -- or an auditor --
     # can open every source. This is not decoration: a government reply must be traceable.
@@ -517,6 +573,9 @@ def build_draft(cfg, llm, query: str, results: list, run_id: str | None = None,
         # NEW: contradictions between a past reply and a supporting document. The core value
         # of the feature -- surfaced, never smoothed into confident prose.
         "contradictions": obj.get("contradictions") or [],
+        # attached docs the model neither cited nor declared irrelevant — flagged in code
+        # (see _flag_unused_docs); a matching gap entry was added for each
+        "docs_unused": docs_unused,
         "sources": sources,
         "supporting_sources": sup_sources,
         "run_id": run_id,

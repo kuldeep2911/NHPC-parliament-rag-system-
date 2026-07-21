@@ -41,10 +41,13 @@ class DraftConfig:
     # time.
     draft_enabled: bool = field(default_factory=lambda: _env_bool("DRAFT_ENABLED", True))
 
-    # How many retrieved answers feed the draft. The whole point is grounding, so more
-    # context is not automatically better: past a handful, weaker matches start diluting
-    # the strong ones and the model drifts toward the average of them.
-    draft_context_k: int = field(default_factory=lambda: _env_int("DRAFT_CONTEXT_K", 5))
+    # How many retrieved answers feed the draft. More context is not automatically better
+    # (weak matches dilute strong ones) — but 5 was measurably too few: the officer sees
+    # up to 8+ verified results and the draft silently ignored everything past rank 5,
+    # which reads as "the draft missed something" (it did). 10 covers every verified set
+    # observed on the 100-question harness; the verify pass has already filtered noise, so
+    # dilution risk is low.
+    draft_context_k: int = field(default_factory=lambda: _env_int("DRAFT_CONTEXT_K", 10))
 
     # Enough for a point-wise reply plus key points and gaps. Generous rather than tight:
     # a truncated draft is worse than a slow one, because the officer cannot tell which

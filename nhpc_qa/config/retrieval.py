@@ -56,7 +56,11 @@ class Phase4Config(Phase3Config):
     """Extends the Phase-3 config (DB + embeddings) with retrieval/rerank/generation."""
 
     # --- retrieval: candidates per retriever ---------------------------------
-    dense_top_n:   int = field(default_factory=lambda: _env_int("RETRIEVE_DENSE_TOP_N", 30))
+    # 50, not 30: tail topics (only 2 sub-questions mention "seismic") were falling outside
+    # the dense top-30 for related-but-differently-worded queries, and the rerank pool
+    # (cap 80) had headroom. Bigger recall pool + the verify precision gate = stability;
+    # the reranker call carries the extra 20 passages at negligible latency.
+    dense_top_n:   int = field(default_factory=lambda: _env_int("RETRIEVE_DENSE_TOP_N", 50))
     keyword_top_n: int = field(default_factory=lambda: _env_int("RETRIEVE_KEYWORD_TOP_N", 30))
     entity_top_n:  int = field(default_factory=lambda: _env_int("RETRIEVE_ENTITY_TOP_N", 30))
     # How many candidates the reranker scores. This is the POOL the sigmoid filter and the
@@ -87,8 +91,30 @@ class Phase4Config(Phase3Config):
     #
     # MODEL-SPECIFIC. Calibrated for llama-nemotron-rerank-1b-v2. A different reranker emits
     # logits on a different scale -- re-run the calibration before trusting this value.
+    # 0.02, not 0.1: the 100-question harness found 9 real-topic queries (seismic
+    # monitoring, NHPC bonds, Kishanganga, Salal, Uri, Dulhasti...) returning ZERO because
+    # every candidate scored sigmoid < 0.1 — the reranker gives topically-right but
+    # differently-phrased matches low logits. The LLM verify is the precision gate; this
+    # filter exists only to bound its cost, so it must sit BELOW the genuine-match floor
+    # (calibrated minimum: 0.003).
     similarity_threshold: float = field(
-        default_factory=lambda: _env_float("SIMILARITY_THRESHOLD", 0.1))
+        default_factory=lambda: _env_float("SIMILARITY_THRESHOLD", 0.02))
+
+    # ─── PLATEAU GUARD — deterministic generic-query rejection (OFF) ─────────
+    # A generic fragment ("the reasons therefor") plateaus dozens of candidates near
+    # sigmoid 1.0. The guard detects that shape — but measured on this corpus it CANNOT be
+    # safely enabled: "hydro power potential in the country" is a REAL topic asked nearly
+    # verbatim ~20 times across sessions, and it saturates exactly like a fragment (23
+    # candidates, 12th-best sigmoid >= 0.97). Width+saturation does not separate "asked 20
+    # times" from "stock phrase". The LLM verify's fragment rule DOES (measured: rejected
+    # 29/29 for "the reasons therefor", kept 12/12 for hydro potential), so that is the
+    # production mechanism and this stays OFF — available for ops if the LLM is ever
+    # disabled and a deterministic backstop is preferred over recall.
+    plateau_guard_enabled: bool = field(
+        default_factory=lambda: _env_bool("PLATEAU_GUARD_ENABLED", False))
+    plateau_min_n: int = field(default_factory=lambda: _env_int("PLATEAU_MIN_N", 12))
+    plateau_min_sigmoid: float = field(
+        default_factory=lambda: _env_float("PLATEAU_MIN_SIGMOID", 0.97))
 
     # A bound on pathological cases, NOT a relevance cap. The relevance decision is the
     # sigmoid filter + the LLM; this only stops a degenerate query returning hundreds.
