@@ -159,7 +159,13 @@ def _draft_text(d):
     """Every human-visible string in the draft, for content checks."""
     bits = [d.get("subject") or "", d.get("opening") or "", d.get("closing") or ""]
     for p in d.get("parts") or []:
+        bits.append(p.get("question") or "")
         bits.append(p.get("text") or "")
+        tbl = p.get("table") or {}
+        if isinstance(tbl, dict):                      # table cells count as draft content
+            bits.extend(str(c) for c in (tbl.get("columns") or []))
+            for row in (tbl.get("rows") or []):
+                bits.extend(str(c) for c in (row if isinstance(row, list) else [row]))
     for kp in d.get("key_points") or []:
         bits.append(kp.get("point") or "")
     for c in d.get("contradictions") or []:

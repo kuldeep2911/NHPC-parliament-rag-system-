@@ -114,7 +114,12 @@ class Config:
     # the standard local Ollama port; single config value, model from llm_model.
     ollama_base_url: str = field(default_factory=lambda: _env_str("NHPC_OLLAMA_BASE_URL", "http://localhost:11434/v1"))
     llm_max_retries: int = 1  # one stricter retry on invalid JSON, then review
-    llm_timeout_s: int = 120
+    llm_timeout_s: int = field(default_factory=lambda: int(_env_str("NHPC_LLM_TIMEOUT_S", "120")))
+    # Ollama-style server-side JSON mode ("format":"json"). Ollama honours it; a self-hosted
+    # NVIDIA NIM (e.g. Nemotron Super 49B) may reject the field. Default on for Ollama; set
+    # NHPC_LLM_JSON_MODE=0 when pointing NHPC_LLM_BASE_URL at a NIM. The extractor already
+    # tolerates prose-wrapped JSON, so turning it off never breaks parsing.
+    llm_json_mode: bool = field(default_factory=lambda: _env_bool("NHPC_LLM_JSON_MODE", True))
     # Run the LLM as a SECOND-OPINION cross-check on every prose file: it counts
     # questions + distinct answers and we flag llm_crosscheck_disagree if it differs
     # from the deterministic split. The deterministic result is kept either way.

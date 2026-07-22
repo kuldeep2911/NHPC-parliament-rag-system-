@@ -53,38 +53,37 @@ $PY -m nhpc_qa.core.db.migrate
 ok "schema up to date"
 
 # ---------------------------------------------------------------------------
-say "3/8  Seed entity dictionary (states, projects, synonyms)"
-# --llm adds offline discovery over every document (uses the local LLM). Drop --llm for a
-# faster, seed-only build.
-$PY -m nhpc_qa.entities.build ${ENTITIES_LLM:+--llm} || die "entity seeding failed"
-ok "entities seeded"
-
-# ---------------------------------------------------------------------------
-say "4/8  Load parsed corpus into Postgres (idempotent upsert)"
-if [[ -d organized ]]; then
-  $PY -m nhpc_qa.pipeline.index.loader
-  ok "corpus loaded"
+# We do NOT copy a database dump or a pre-parsed corpus to the server. Only the RAW source
+# PDFs are copied; the pipeline REGENERATES everything (organized/ + all DB rows +
+# embeddings) from them. This step is the whole data build and is the slow one: it runs the
+# local OCR/parse + the LLM extraction + the embedder over the corpus.
+say "3/6  Build the index from raw source  (crawl -> parse -> index + embed)"
+if [[ -d "${NHPC_SOURCE_ROOT:-Original Data}" || -n "${NHPC_SOURCE_ROOT:-}" ]]; then
+  # Resumable: re-running only redoes what changed. --stages can narrow it (e.g. index only).
+  $PY -m nhpc_qa.cli run ${BOOTSTRAP_RUN_ARGS:-} || die "pipeline run failed"
+  ok "corpus rebuilt from source"
 else
-  printf "  (no organized/ folder found — skipping; run the parse pipeline first if this is a fresh corpus)\n"
+  die "source tree not found (set NHPC_SOURCE_ROOT to the copied raw PDFs)"
 fi
 
 # ---------------------------------------------------------------------------
-say "5/8  Embed sub-questions  (resumable: only missing rows)"
-$PY -m nhpc_qa.pipeline.index.embedder --stale
-ok "question embeddings ready"
+say "4/6  Seed + consolidate the entity dictionary"
+# seed states/projects/synonyms; --llm adds offline discovery over every document (local LLM)
+$PY -m nhpc_qa.entities.build ${ENTITIES_LLM:+--llm} || die "entity seeding failed"
+# answer-group embeddings are not part of `run`; build them here (resumable)
+$PY -m nhpc_qa.pipeline.index.embed_answers --stale || die "answer embedding failed"
+$PY -m nhpc_qa.entities.dedupe || printf "  (dedupe: nothing to merge)\n"
+ok "entities ready, answers embedded"
 
 # ---------------------------------------------------------------------------
-say "6/8  Embed answer groups  (resumable: only missing rows)"
-$PY -m nhpc_qa.pipeline.index.embed_answers --stale
-ok "answer embeddings ready"
+# Create the FIRST admin so you can log in. Idempotent: if an admin already exists this is a
+# no-op. Set AUTH_ADMIN_EMAIL (+ optionally AUTH_ADMIN_PASSWORD) in .env; with a password
+# set you log in with it directly, otherwise a one-time password is printed here ONCE.
+say "5/6  Create the administrator account"
+$PY -m nhpc_qa.cli create-admin || printf "  (admin already exists — nothing to do)\n"
 
 # ---------------------------------------------------------------------------
-say "7/8  Consolidate duplicate entities"
-$PY -m nhpc_qa.entities.dedupe || printf "  (dedupe skipped or nothing to merge)\n"
-ok "entities consolidated"
-
-# ---------------------------------------------------------------------------
-say "8/8  Summary"
+say "6/6  Summary"
 $PY - <<'PYEOF'
 from nhpc_qa.config import Settings, load_dotenv
 from nhpc_qa.core.db.session import connect

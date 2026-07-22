@@ -78,21 +78,30 @@ already answered, with the answers it gave. Draft a reply to the new question.
 6. MATCH THE LANGUAGE. If the officer's question is in Hindi, draft in Hindi. If the past
    answers are in Hindi, keep their terminology. Never force-translate.
 
-7. STRUCTURE. If the new question has sub-parts ((a), (b), (c)...), answer point-wise with
-   one entry per part. Otherwise write a single part with label "".
+7. STRUCTURE — QUESTION THEN ANSWER, like the real reply files. If the new question has
+   sub-parts ((a), (b), (c)...), produce ONE entry per part. Otherwise a single part with
+   label "". For EACH part fill BOTH:
+   - "question": the text of that sub-part of the NEW question, verbatim/lightly cleaned
+     (this is printed in bold above the answer, exactly as the past reply files do);
+   - "text": the drafted ANSWER to that part only.
 
-8. REPLY FORMAT. These drafts become NHPC's official reply, so MATCH the format of the past
-   replies you were given:
+8. TABLES — produce a table when it is the right format. Set a part's "table" when the
+   question or the officer's guidance asks for one ("generate a table", "list ... site-wise",
+   "project-wise", "year-wise") OR when the grounded facts are naturally tabular (a set of
+   projects with their capacity/status/date, a multi-year figure series). Build it ONLY from
+   facts in the sources — never invent rows or cells. When you emit a table, "text" holds any
+   lead-in sentence (e.g. "The details are as under:-") and "table" holds the grid; leave
+   "table" null for a prose-only part.
+
+9. REPLY FORMAT. These drafts become NHPC's official reply, so MATCH the past replies:
    - a SUBJECT line in their style ("Information for framing the reply of <House> question
      regarding <topic>"), drawn from the new question;
-   - the standard OPENING the past replies use ("The information ... is as under:-" for a
-     substantive reply; "May be replied by Ministry of Power. As far as NHPC is concerned,
-     ..." for a deferral);
-   - the point-wise (a)/(b)/(c) body;
+   - the standard OPENING ("The information ... is as under:-" for substantive; "May be
+     replied by Ministry of Power. As far as NHPC is concerned, ..." for a deferral);
+   - the point-wise (a)/(b)/(c) body, each with its question then its answer;
    - a standard CLOSING if the past replies use one.
-   Put the subject in "subject", the opening in "opening", the closing in "closing". Keep
-   each part's "text" as the answer to that part only. Match the register exactly -- do not
-   invent a house style the past replies do not use.
+   Put the subject in "subject", opening in "opening", closing in "closing". Match the
+   register exactly -- do not invent a house style the past replies do not use.
 
 Return STRICT JSON only, no prose outside it:
 
@@ -103,7 +112,11 @@ Return STRICT JSON only, no prose outside it:
   "opening": "<the standard opening sentence>",
   "closing": "<standard closing, or empty string>",
   "parts": [
-    {"label": "(a)", "text": "<the drafted reply for this part>",
+    {"label": "(a)",
+     "question": "<the new question's sub-part text, printed in bold above the answer>",
+     "text": "<the drafted answer for this part (a lead-in sentence if a table follows)>",
+     "table": {"columns": ["<col1>", "<col2>"],
+               "rows": [["<r1c1>", "<r1c2>"], ["<r2c1>", "<r2c2>"]]} ,
      "cites": ["2023-jul-aug lok_sabha 8779"]}
   ],
   "key_points": [
@@ -113,7 +126,8 @@ Return STRICT JSON only, no prose outside it:
   "gaps": [
     {"part": "(c)", "reason": "<what the past answers do not cover>"}
   ]
-}"""
+}
+("table" is OPTIONAL — omit it or set null for a prose-only part.)"""
 
 
 # The variant used when the officer has selected supporting documents. It ADDS the
@@ -386,7 +400,10 @@ def _empty_parts_become_gaps(obj):
     """
     kept, moved = [], []
     for p in obj.get("parts") or []:
-        if (p.get("text") or "").strip():
+        # a part is real if it has answer text OR a table with rows (a table-only part)
+        tbl = p.get("table") or {}
+        has_table = bool(tbl and (tbl.get("rows") or []))
+        if (p.get("text") or "").strip() or has_table:
             kept.append(p)
         else:
             moved.append({

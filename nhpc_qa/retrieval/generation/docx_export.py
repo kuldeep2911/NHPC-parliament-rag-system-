@@ -35,7 +35,6 @@ _DEVA = "Nirmala UI"
 
 _RED = RGBColor(0xB0, 0x2A, 0x22)
 _GREY = RGBColor(0x6B, 0x71, 0x78)
-_NAVY = RGBColor(0x1B, 0x3A, 0x63)
 
 
 def _font(run, *, size=11, bold=False, italic=False, color=None, hindi=False):
@@ -83,19 +82,19 @@ def _para(doc, text="", *, size=11, bold=False, italic=False, color=None,
     return p
 
 
-def _heading(doc, text):
-    p = _para(doc, text, size=12, bold=True, color=_NAVY, space_after=4)
-    return p
-
-
-NOTICE = ("DRAFT — FOR OFFICER REVIEW. Generated from NHPC's past parliamentary replies. "
-          "Verify every figure and claim against the cited sources before use. "
-          "This is NOT an approved reply.")
-
-
 def build_docx(query: str, draft: dict, *, user_email: str | None = None,
                run_id: str | None = None) -> bytes:
-    """The draft as .docx bytes. Pure function -- no filesystem, no network."""
+    """
+    The draft as .docx bytes — a CLEAN REPLY FILE ONLY.
+
+    By officer request, the downloaded document mirrors an actual NHPC reply file and NOTHING
+    else: Subject, then for each part the QUESTION in bold followed by the answer (and a
+    table where one applies). No citations, no key-points, no gaps, no contradictions, no
+    source tables — those live only on the website for verification. A single unobtrusive
+    DRAFT footer remains, because this is still not an approved reply.
+
+    Pure function -- no filesystem, no network.
+    """
     doc = Document()
 
     # Base style, so anything we do not touch still has Devanagari coverage.
@@ -104,170 +103,56 @@ def build_docx(query: str, draft: dict, *, user_email: str | None = None,
     normal.font.size = Pt(11)
     normal.element.rPr.rFonts.set(qn("w:cs"), _DEVA)
 
-    # ---- the DRAFT notice, unmissable ----------------------------------
-    banner = doc.add_paragraph()
-    banner.paragraph_format.space_after = Pt(10)
-    _font(banner.add_run("⚠ " + NOTICE), size=10, bold=True, color=_RED)
-
-    # ═══ THE REPLY, in reply-file format ═══
-    # This is the part the officer files: subject line, standard opening, point-wise answer,
-    # closing -- matching how the past replies are written. The review material (key points,
-    # gaps, contradictions, sources) follows below a separator, not mixed into the reply.
     subject = (draft.get("subject") or "").strip()
     opening = (draft.get("opening") or "").strip()
     closing = (draft.get("closing") or "").strip()
 
+    # ---- Subject (bold), centred like the reply files ------------------
     if subject:
-        p = _para(doc, "", space_after=8)
-        _font(p.add_run("Subject: "), size=11, bold=True)
-        _font(p.add_run(subject), size=11, hindi=_is_hindi(subject))
+        p = _para(doc, "", space_after=10, align=WD_ALIGN_PARAGRAPH.CENTER)
+        _font(p.add_run("Subject: "), size=12, bold=True)
+        _font(p.add_run(subject), size=12, bold=True, hindi=_is_hindi(subject))
     else:
-        _para(doc, query or "", size=11, bold=True, space_after=8)
+        _para(doc, query or "", size=12, bold=True, space_after=10,
+              align=WD_ALIGN_PARAGRAPH.CENTER)
 
     if opening:
         _para(doc, opening, size=11, space_after=8)
 
+    # ---- body: QUESTION (bold) then ANSWER, per part -------------------
     parts = draft.get("parts") or []
     if not parts and not opening:
         _para(doc, "(no draft was produced)", italic=True, color=_GREY)
     for p in parts:
         label = (p.get("label") or "").strip()
+        question = (p.get("question") or "").strip()
         text = (p.get("text") or "").strip()
-        para = doc.add_paragraph()
-        para.paragraph_format.space_after = Pt(7)
-        para.paragraph_format.left_indent = Pt(6)
-        if label:
-            _font(para.add_run(f"{label} "), size=11, bold=True)
-        _font(para.add_run(text), size=11, hindi=_is_hindi(text))
+
+        # QUESTION line — label + question text, in bold (the reply-file convention)
+        if question:
+            qp = doc.add_paragraph()
+            qp.paragraph_format.space_after = Pt(3)
+            if label:
+                _font(qp.add_run(f"{label} "), size=11, bold=True)
+            _font(qp.add_run(question), size=11, bold=True, hindi=_is_hindi(question))
+
+        # ANSWER line
+        if text:
+            ap = doc.add_paragraph()
+            ap.paragraph_format.space_after = Pt(7)
+            ap.paragraph_format.left_indent = Pt(10)
+            # if there was no question line, the label leads the answer instead
+            if label and not question:
+                _font(ap.add_run(f"{label} "), size=11, bold=True)
+            _font(ap.add_run(text), size=11, hindi=_is_hindi(text))
+
+        # optional TABLE built from the grounded facts
+        _render_table(doc, p.get("table"))
 
     if closing:
         _para(doc, closing, size=11, space_after=10)
 
-    _rule(doc)
-    _para(doc, "REVIEW ANNEXURE — not part of the reply. Verify each point against its "
-               "source before filing.", size=9, italic=True, color=_GREY, space_after=10)
-
-    # per-part citations, for review
-    if parts:
-        _heading(doc, "CITATIONS PER POINT")
-        for p in parts:
-            label = (p.get("label") or "").strip()
-            cites = p.get("cites") or []
-            cp = doc.add_paragraph(style="List Bullet")
-            cp.paragraph_format.space_after = Pt(2)
-            _font(cp.add_run(f"{label or '—'}: "), size=9.5, bold=True)
-            if cites:
-                _font(cp.add_run("; ".join(cites)), size=9.5, color=_GREY)
-            else:
-                _font(cp.add_run("⚠ UNCITED — no source supports this. Verify before use."),
-                      size=9.5, bold=True, color=_RED)
-        _para(doc, "", space_after=6)
-
-    # ---- key points -----------------------------------------------------
-    kps = draft.get("key_points") or []
-    if kps:
-        _heading(doc, "KEY POINTS THE REPLY SHOULD COVER")
-        for kp in kps:
-            text = (kp.get("point") or "").strip()
-            para = doc.add_paragraph(style="List Bullet")
-            para.paragraph_format.space_after = Pt(2)
-            _font(para.add_run(text), size=10.5, hindi=_is_hindi(text))
-            cites = kp.get("cites") or []
-            if cites:
-                _font(para.add_run("  [" + "; ".join(cites) + "]"), size=8.5, italic=True,
-                      color=_GREY)
-            else:
-                _font(para.add_run("  [UNCITED]"), size=8.5, bold=True, color=_RED)
-        _para(doc, "", space_after=8)
-
-    # ---- gaps -----------------------------------------------------------
-    gaps = draft.get("gaps") or []
-    if gaps:
-        _heading(doc, "GAPS — OFFICER INPUT NEEDED")
-        _para(doc, "The past replies do not cover the following. Nothing has been invented "
-                   "for them.", size=9.5, italic=True, color=_GREY, space_after=4)
-        for g in gaps:
-            part = (g.get("part") or "").strip()
-            reason = (g.get("reason") or "").strip()
-            para = doc.add_paragraph(style="List Bullet")
-            para.paragraph_format.space_after = Pt(2)
-            if part:
-                _font(para.add_run(f"{part}: "), size=10.5, bold=True, color=_RED)
-            _font(para.add_run(reason), size=10.5, hindi=_is_hindi(reason))
-        _para(doc, "", space_after=8)
-
-    # ---- contradictions — surfaced, not smoothed -----------------------
-    contradictions = draft.get("contradictions") or []
-    if contradictions:
-        _heading(doc, "⚠ CONTRADICTIONS — PAST REPLY vs CURRENT DATA")
-        _para(doc, "The current internal data disagrees with what was told to Parliament. "
-                   "Reconcile before use.", size=9.5, italic=True, color=_RED, space_after=4)
-        for c in contradictions:
-            para = doc.add_paragraph(style="List Bullet")
-            para.paragraph_format.space_after = Pt(3)
-            topic = (c.get("topic") or "").strip()
-            if topic:
-                _font(para.add_run(topic + " — "), size=10.5, bold=True, hindi=_is_hindi(topic))
-            _font(para.add_run(f"past: {c.get('past','')} [{c.get('past_cite','')}]  ·  "
-                               f"current: {c.get('current','')} [{c.get('current_cite','')}]"),
-                  size=10, hindi=_is_hindi((c.get('past') or '') + (c.get('current') or '')))
-        _para(doc, "", space_after=8)
-
-    # ---- sources: past parliamentary replies ---------------------------
-    sources = draft.get("sources") or []
-    if sources:
-        _heading(doc, "SOURCES — PAST PARLIAMENTARY REPLIES")
-        t = doc.add_table(rows=1, cols=5)
-        t.style = "Table Grid"
-        t.alignment = WD_TABLE_ALIGNMENT.LEFT
-        for i, h in enumerate(("Citation", "Session", "House", "Answered", "Type")):
-            cell = t.rows[0].cells[i]
-            cell.text = ""
-            _font(cell.paragraphs[0].add_run(h), size=9, bold=True)
-        for s in sources:
-            row = t.add_row().cells
-            vals = (s.get("citation") or "", s.get("session") or "", s.get("house") or "",
-                    s.get("reply_date") or "—", s.get("answer_type") or "")
-            for i, v in enumerate(vals):
-                row[i].text = ""
-                _font(row[i].paragraphs[0].add_run(str(v)), size=9)
-        _para(doc, "", space_after=10)
-
-    # ---- sources: supporting documents (a DIFFERENT authority) ---------
-    sup = draft.get("supporting_sources") or []
-    if sup:
-        _heading(doc, "SOURCES — SUPPORTING DOCUMENTS (internal current data)")
-        _para(doc, "Figures from these carry their as-of date/period. Internal data, not a "
-                   "past parliamentary reply.", size=9, italic=True, color=_GREY, space_after=4)
-        t = doc.add_table(rows=1, cols=4)
-        t.style = "Table Grid"
-        t.alignment = WD_TABLE_ALIGNMENT.LEFT
-        for i, h in enumerate(("Citation", "Category", "Document", "As of / Period")):
-            cell = t.rows[0].cells[i]
-            cell.text = ""
-            _font(cell.paragraphs[0].add_run(h), size=9, bold=True)
-        for s in sup:
-            row = t.add_row().cells
-            period = s.get("period_label") or (
-                f"as on {s['as_of_date']}" if s.get("as_of_date") else "—")
-            vals = (s.get("citation") or "", s.get("category_label") or s.get("category") or "",
-                    s.get("display_name") or "", period)
-            for i, v in enumerate(vals):
-                row[i].text = ""
-                _font(row[i].paragraphs[0].add_run(str(v)), size=9,
-                      hindi=_is_hindi(str(v)))
-        _para(doc, "", space_after=10)
-
-    # ---- footer, on every page -----------------------------------------
-    _rule(doc)
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    meta = f"Generated {stamp}"
-    if user_email:
-        meta += f" for {user_email}"
-    if run_id:
-        meta += f" · retrieval run {run_id}"
-    _para(doc, meta, size=8.5, color=_GREY, space_after=2)
-
+    # ---- footer, on every page (the only DRAFT marking that remains) ---
     sec = doc.sections[0]
     fp = sec.footer.paragraphs[0]
     fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -279,10 +164,32 @@ def build_docx(query: str, draft: dict, *, user_email: str | None = None,
     return buf.getvalue()
 
 
-def _rule(doc):
-    p = doc.add_paragraph()
-    p.paragraph_format.space_after = Pt(8)
-    _font(p.add_run("─" * 58), size=8, color=RGBColor(0xD0, 0xD0, 0xD0))
+def _render_table(doc, table):
+    """Render an optional {columns, rows} grid into the document. No-op if empty/malformed."""
+    if not isinstance(table, dict):
+        return
+    cols = table.get("columns") or []
+    rows = table.get("rows") or []
+    if not cols or not rows:
+        return
+    ncol = len(cols)
+    t = doc.add_table(rows=1, cols=ncol)
+    t.style = "Table Grid"
+    t.alignment = WD_TABLE_ALIGNMENT.LEFT
+    # header
+    for i, h in enumerate(cols):
+        cell = t.rows[0].cells[i]
+        cell.text = ""
+        _font(cell.paragraphs[0].add_run(str(h)), size=10, bold=True, hindi=_is_hindi(str(h)))
+    # body — tolerate ragged rows (pad/truncate to ncol)
+    for r in rows:
+        cells = list(r) if isinstance(r, (list, tuple)) else [r]
+        cells = (cells + [""] * ncol)[:ncol]
+        row = t.add_row().cells
+        for i, v in enumerate(cells):
+            row[i].text = ""
+            _font(row[i].paragraphs[0].add_run(str(v)), size=10, hindi=_is_hindi(str(v)))
+    _para(doc, "", space_after=8)
 
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")

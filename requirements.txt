@@ -63,3 +63,8 @@ watchdog==6.0.0
 python-dotenv==1.2.2
 requests==2.32.5
 httpx==0.28.1
+
+# --- observability (Langfuse; production tracing UI) --------------------------
+# Pin the exact version once installed on the build machine (pip freeze | grep langfuse).
+# Only imported when LANGFUSE_ENABLED=1. Kept in the range the app was built against.
+langfuse>=2.53,<3

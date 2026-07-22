@@ -240,8 +240,12 @@ class OllamaLLM(OpenAICompatTextMixin):
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "temperature": 0, "stream": False,
-            "format": "json",  # Ollama: constrain output to valid JSON
         }
+        # Ollama's server-side JSON mode. A self-hosted NVIDIA NIM (Nemotron Super 49B) may
+        # reject this field, so it is config-gated (NHPC_LLM_JSON_MODE=0 for a NIM). The
+        # extractor tolerates prose-wrapped JSON either way, so turning it off is safe.
+        if getattr(self.cfg, "llm_json_mode", True):
+            body["format"] = "json"
         req = urllib.request.Request(
             self.base_url.rstrip("/") + "/chat/completions",
             data=json.dumps(body).encode("utf-8"),

@@ -48,12 +48,17 @@
   .bar { display:flex; gap:10px; align-items:stretch; }
   #q { flex:1; min-width:0; font:15px 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif; padding:13px 16px;
        border:1.5px solid #d7d4ce; border-radius:8px; background:#fff; color:var(--ink); }
-  .btn { border-radius:8px; font:600 14.5px 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif; cursor:pointer;
-         white-space:nowrap; padding:0 22px; border:none; background:var(--navy); color:#fff; }
+  /* Self-sufficient sizing: inline-flex + min-height + vertical padding, so EVERY button —
+     including the <label> file-pickers — is the same height and never clips its text,
+     regardless of the flex container it sits in. */
+  .btn { box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
+         gap:7px; min-height:40px; border-radius:8px;
+         font:600 14px 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif; cursor:pointer;
+         white-space:nowrap; padding:8px 20px; line-height:1.2; border:1.5px solid transparent;
+         background:var(--navy); color:#fff; text-align:center; vertical-align:middle; }
   .btn:hover:not(:disabled) { background:#14304f; }
   .btn:disabled { opacity:.55; cursor:default; }
-  .btn.ghost { background:#fff; color:#40464e; border:1.5px solid #d7d4ce; font-weight:500;
-               font-size:14px; padding:0 18px; }
+  .btn.ghost { background:#fff; color:#40464e; border-color:#d7d4ce; font-weight:500; }
   .btn.ghost:hover:not(:disabled) { background:#f0efec; border-color:#c3bfb6; }
   .btn.ghost[aria-expanded="true"] { background:#f0efec; }
 
@@ -194,7 +199,7 @@
   .wrole { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em;
            padding:3px 8px; border-radius:20px; background:#eceae5; color:#767c83; }
   .wrole.admin { background:var(--navy); color:#fff; }
-  .btn.small { font-size:12.5px; padding:6px 11px; height:auto; }
+  .btn.small { font-size:12.5px; min-height:34px; padding:5px 13px; }
   .btn.ghost.danger { color:#9a3b32; border-color:#e6c9c5; }
   .btn.ghost.danger:hover { background:#fdf0ef; }
 
@@ -424,9 +429,16 @@
               border-radius:0 8px 8px 0; padding:16px 18px; margin-bottom:8px; }
   .reply-subject { font-size:14px; color:var(--ink); margin-bottom:10px; }
   .reply-open { font-size:14px; color:var(--ink2); line-height:1.6; margin-bottom:10px; }
-  .reply-part { margin-bottom:12px; }
-  .reply-part .dtext { font-size:14px; color:var(--ink2); line-height:1.6; }
+  .reply-part { margin-bottom:14px; }
+  .reply-part .dq { font-size:14px; color:var(--ink); line-height:1.55; margin-bottom:4px; }
+  .reply-part .dtext { font-size:14px; color:var(--ink2); line-height:1.6; padding-left:14px; }
   .reply-close { font-size:14px; color:var(--ink2); line-height:1.6; margin-top:8px; }
+  /* a table generated inside a draft part */
+  .dtable { width:100%; border-collapse:collapse; margin:10px 0 4px; font-size:13px; }
+  .dtable th, .dtable td { border:1px solid #d7d4ce; padding:6px 9px; text-align:left;
+                           vertical-align:top; }
+  .dtable th { background:#f0efec; font-weight:600; color:var(--ink); white-space:nowrap; }
+  .dtable td { color:var(--ink2); }
   .dkp { margin:0; padding-left:20px; }
   .dkp li { font-size:13.5px; color:var(--ink2); line-height:1.6; margin-bottom:7px; }
   .dgaps { margin:0; padding-left:20px; }
@@ -475,7 +487,7 @@
       <input class="gin" id="fc_new" type="password" autocomplete="new-password" required>
       <label class="glab" for="fc_new2">Confirm new password</label>
       <input class="gin" id="fc_new2" type="password" autocomplete="new-password" required>
-      <div class="ghint">At least 12 characters, mixing three of: lowercase, uppercase,
+      <div class="ghint">At least 8 characters, mixing three of: lowercase, uppercase,
         digits, symbols.</div>
       <div id="fc_err" class="gerr" hidden></div>
       <button class="btn gbtn" id="fc_go" type="submit">Set password &amp; continue</button>
@@ -1091,6 +1103,18 @@ const PATTERN_NOTE = {
   mixed: "The past replies are mixed; the draft follows the pattern of the most relevant ones.",
 };
 
+// Render a draft part's optional {columns, rows} table. Empty/malformed -> nothing.
+function draftTable(t) {
+  if (!t || !Array.isArray(t.columns) || !Array.isArray(t.rows) || !t.columns.length
+      || !t.rows.length) return "";
+  const head = t.columns.map(c => `<th>${esc(String(c))}</th>`).join("");
+  const body = t.rows.map(r => {
+    const cells = Array.isArray(r) ? r : [r];
+    return `<tr>${t.columns.map((_, i) => `<td>${esc(String(cells[i] ?? ""))}</td>`).join("")}</tr>`;
+  }).join("");
+  return `<table class="dtable"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
 function renderDraft(D) {
   // Dual citation: a DOC: cite is a supporting document (internal current data), a plain
   // cite is a past parliamentary reply. They are DIFFERENT authorities and look different.
@@ -1134,7 +1158,9 @@ function renderDraft(D) {
         ${D.opening ? `<div class="reply-open">${esc(D.opening)}</div>` : ""}
         ${(D.parts || []).map(p => `
           <div class="reply-part">
-            <div class="dtext">${p.label ? `<b>${esc(p.label)}</b> ` : ""}${esc(p.text)}</div>
+            ${p.question ? `<div class="dq">${p.label ? `<b>${esc(p.label)}</b> ` : ""}<b>${esc(p.question)}</b></div>` : ""}
+            ${p.text ? `<div class="dtext">${(!p.question && p.label) ? `<b>${esc(p.label)}</b> ` : ""}${esc(p.text)}</div>` : ""}
+            ${draftTable(p.table)}
             ${cite(p.cites)}
           </div>`).join("")}
         ${D.closing ? `<div class="reply-close">${esc(D.closing)}</div>` : ""}
@@ -1356,7 +1382,7 @@ $("#pwBtn").onclick = () => {
       <input class="gin" id="cp_new" type="password" autocomplete="new-password" required>
       <label class="glab">Confirm new password</label>
       <input class="gin" id="cp_new2" type="password" autocomplete="new-password" required>
-      <div class="ghint">At least 12 characters, mixing three of: lowercase, uppercase, digits, symbols.</div>
+      <div class="ghint">At least 8 characters, mixing three of: lowercase, uppercase, digits, symbols.</div>
       <div id="cp_msg" class="gerr" hidden></div>
       <button class="btn" type="submit">Change password</button>
     </form>`);
@@ -1621,15 +1647,13 @@ async function loadTree(path) {
 
 // ── delete — HARD and irreversible ────────────────────────────────────────
 async function del(path) {
-  // Confirm with the PATH TYPED BACK, not a bare yes/no: this destroys parliamentary
-  // records and their embeddings, and there is no undo.
-  const typed = prompt(
-    `PERMANENTLY DELETE\n\n  ${path}\n\n` +
-    `The files AND the indexed documents (answers, tables, embeddings) will be removed. ` +
-    `They will stop appearing in search immediately. This cannot be undone.\n\n` +
-    `Type the path exactly to confirm:`);
-  if (typed === null) return;
-  if (typed.trim() !== path) { alert("That does not match. Nothing was deleted."); return; }
+  // A single clear warning, then delete. The old "type the path back" step was removed at
+  // the officer's request; the server still requires the confirm token, which the client
+  // supplies automatically (a mistyped API call is still rejected server-side).
+  if (!confirm(
+    `Permanently delete this folder?\n\n  ${path}\n\n` +
+    `The files AND the indexed documents (answers, tables, embeddings) will be removed and ` +
+    `will stop appearing in search immediately. This cannot be undone.`)) return;
 
   try {
     const r = await api(`/admin/tree?path=${encodeURIComponent(path)}`

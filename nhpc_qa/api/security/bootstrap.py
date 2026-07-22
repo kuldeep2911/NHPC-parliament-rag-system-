@@ -23,6 +23,7 @@ re-running it in a deploy script cannot silently mint a second administrator.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 from nhpc_qa.config import Settings, load_dotenv
@@ -61,22 +62,28 @@ def create_admin(email: str | None = None, password: str | None = None) -> int:
                   "reset it directly in the database.", file=sys.stderr)
             return 1
 
+        # A password may be supplied explicitly, OR via AUTH_ADMIN_PASSWORD in .env, so an
+        # automated deploy creates a login-ready admin without an operator fishing a
+        # generated one out of the logs. If neither is given, we generate and print one.
+        if password is None:
+            password = (os.environ.get("AUTH_ADMIN_PASSWORD") or "").strip() or None
         generated = password is None
         if generated:
             password = passwords.generate_password()
         else:
             problems = passwords.check_policy(cfg, password, email=email)
             if problems:
-                print("ERROR: password " + "; ".join(problems), file=sys.stderr)
+                print("ERROR: admin password " + "; ".join(problems), file=sys.stderr)
                 return 2
 
+        # Force a first-login change ONLY when we generated the password (it was printed to
+        # a terminal, which gets scrolled back / screenshotted / shoulder-surfed). If the
+        # operator supplied their own via AUTH_ADMIN_PASSWORD, it was never displayed and
+        # they chose it deliberately, so let them log in with it directly.
         uid = users.create_user(
             conn, cfg, email, password, "admin",
             created_by=None,          # by definition, nobody created the first admin
-            # The bootstrap admin must ALSO change their password on first login: the
-            # generated one was printed to a terminal, and terminals get scrolled back,
-            # screenshotted and shoulder-surfed.
-            must_change=True,
+            must_change=generated,
             actor=None,
         )
         users.audit(conn, "admin_bootstrapped", success=True,
@@ -101,7 +108,10 @@ def create_admin(email: str | None = None, password: str | None = None) -> int:
     else:
         print("  password  (the one you supplied — not echoed)")
     print()
-    print("  You will be required to change it on first login.")
+    if generated:
+        print("  You will be required to change it on first login.")
+    else:
+        print("  Log in with this password. (Change it anytime from the account menu.)")
     print(_RULE)
     print()
     print("  Next:  set AUTH_ENABLED=true and AUTH_SECRET_KEY in .env, then `nhpc serve`")

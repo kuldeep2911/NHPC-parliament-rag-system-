@@ -25,12 +25,23 @@ echo "   $(ls "$OUT/wheelhouse" | wc -l) wheels"
 
 echo "== 2. Docker images (Postgres + NIMs + Ollama) =="
 # NIM images require a prior `docker login nvcr.io` with your NGC key.
+# Core images. The Langfuse stack images are added when INCLUDE_LANGFUSE=1 (see below).
 IMAGES=(
   "pgvector/pgvector:pg16"
   "nvcr.io/nim/nvidia/llama-nemotron-embed-1b-v2:latest"
   "nvcr.io/nim/nvidia/llama-nemotron-rerank-1b-v2:latest"
   "ollama/ollama:0.5.7"
 )
+# Langfuse observability stack (self-hosted). Set INCLUDE_LANGFUSE=1 to bundle it.
+if [[ "${INCLUDE_LANGFUSE:-1}" == "1" ]]; then
+  # exact tags come from deploy/langfuse/docker-compose.yml — read them so they never drift
+  while read -r img; do IMAGES+=("$img"); done < <(
+    grep -Eo 'image:\s*\S+' deploy/langfuse/docker-compose.yml | awk '{print $2}' | sort -u)
+fi
+# Optional CV parsing NIMs (uncomment if you use NHPC_PARSER_BACKEND=nemotron):
+# IMAGES+=( "nvcr.io/nim/nvidia/nemoretriever-ocr-v1:latest"
+#           "nvcr.io/nim/nvidia/nemoretriever-page-elements-v2:latest"
+#           "nvcr.io/nim/nvidia/nemoretriever-table-structure-v1:latest" )
 for img in "${IMAGES[@]}"; do
   echo "   pulling $img"
   docker pull "$img"

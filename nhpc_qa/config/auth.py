@@ -58,7 +58,7 @@ class AuthConfig:
     argon2_parallelism: int = field(default_factory=lambda: _env_int("ARGON2_PARALLELISM", 4))
 
     # --- password policy (enforced SERVER-side; the browser is not a control) -
-    password_min_length: int = field(default_factory=lambda: _env_int("AUTH_PASSWORD_MIN_LENGTH", 12))
+    password_min_length: int = field(default_factory=lambda: _env_int("AUTH_PASSWORD_MIN_LENGTH", 8))
 
     # --- brute-force defence ------------------------------------------------
     # Per-user: persisted in the DB, so restarting the process does NOT reset an
@@ -103,8 +103,8 @@ class AuthConfig:
         if self.cookie_samesite == "none" and not self.cookie_secure:
             errs.append("SameSite=None requires Secure (the browser will reject it otherwise)")
 
-        if self.password_min_length < 12:
-            errs.append("AUTH_PASSWORD_MIN_LENGTH must be >= 12")
+        if self.password_min_length < 8:
+            errs.append("AUTH_PASSWORD_MIN_LENGTH must be >= 8")
         if self.argon2_memory_cost < 19456:      # OWASP floor: 19 MiB
             errs.append("ARGON2_MEMORY_COST is below the OWASP minimum (19456 KiB)")
         if "admin" not in self.roles():
