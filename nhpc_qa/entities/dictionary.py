@@ -1,12 +1,11 @@
 """
-The entity dictionary: normalisation, deterministic ids, store, and the deterministic
-matcher used at BOTH index time and query time.
+Entity dictionary: normalisation, deterministic ids, storage, and the matcher that runs at
+both index time and query time.
 
-⚠️ THE MATCHER IS DETERMINISTIC AND SHARED. ⚠️
-match_entities() is the ONE function that turns text into canonical entity ids, and it is
-called identically for a record's question/answer at index time and for the officer's query
-at query time. That is what makes "HP" and "Himachal Pradesh" resolve to the same
-entity_id, which is the whole fix for the abbreviation instability.
+The matcher is deterministic and shared. match_entities() is the single function that turns
+text into canonical entity ids, called identically for a record at index time and for the
+officer's query at query time. That shared path is what makes "HP" and "Himachal Pradesh"
+resolve to the same entity_id — the fix for abbreviation instability.
 """
 
 from __future__ import annotations
@@ -18,27 +17,28 @@ from nhpc_qa.core.logging import get_logger
 
 log = get_logger("nhpc.entities.dict")
 
-# aliases shorter than this are only matched with word boundaries AND uppercase intent --
-# a 2-letter alias like 'ap' must not fire on the 'ap' inside 'apply'. Handled in the
-# matcher by requiring word boundaries; length is a secondary guard for very short ones.
+# Aliases shorter than this match only on word boundaries, so a 2-letter alias like 'ap'
+# never fires inside 'apply'. Length is a secondary guard for very short aliases.
 _MIN_BARE = 2
 
 
 def normalise(s: str) -> str:
-    """Lowercase, strip accents, collapse whitespace/punctuation-runs. The canonical form
-    for storing and comparing an alias. Devanagari passes through (casefold is a no-op)."""
+    """
+    Canonical form of an alias: lowercase, accents stripped, whitespace/punctuation collapsed.
+    Used for both storing and comparing. Devanagari passes through unchanged.
+    """
     s = unicodedata.normalize("NFKC", str(s or "")).strip().lower()
     s = s.replace("&", " and ")
-    s = re.sub(r"[.–—_/]+", " ", s)      # dots, dashes, slashes -> space
+    s = re.sub(r"[.–—_/]+", " ", s)      # dots/dashes/slashes -> space
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 
 
 def canonical_id(name: str) -> str:
     """
-    DETERMINISTIC id from a canonical name. 'Himachal Pradesh' -> 'himachal_pradesh',
-    'Teesta-VI' -> 'teesta_vi'. Deterministic so a re-run of the build upserts the same row
-    instead of creating a duplicate.
+    Deterministic id from a canonical name: 'Himachal Pradesh' -> 'himachal_pradesh',
+    'Teesta-VI' -> 'teesta_vi'. Deterministic so a rebuild upserts the same row instead of
+    creating a duplicate.
     """
     s = normalise(name)
     s = re.sub(r"[^a-z0-9ऀ-ॿ]+", "_", s)   # keep alnum + Devanagari
@@ -53,9 +53,9 @@ def upsert_entity(conn, *, canonical, entity_type, aliases, source="manual",
     """
     Add or update one canonical entity and its aliases. Idempotent on the deterministic id.
 
-    An alias already owned by a DIFFERENT entity is LEFT ALONE (not stolen): the first
-    entity to claim a surface form keeps it, because an ambiguous alias mapping to two
-    entities is worse than a missing one. Returns (entity_id, n_new_aliases).
+    An alias already owned by a different entity is left alone: the first entity to claim a
+    surface form keeps it, since an ambiguous alias is worse than a missing one.
+    Returns (entity_id, n_new_aliases).
     """
     eid = canonical_id(canonical)
     with conn.cursor() as cur:
@@ -66,7 +66,7 @@ def upsert_entity(conn, *, canonical, entity_type, aliases, source="manual",
             ON CONFLICT (entity_id) DO UPDATE SET
                 canonical    = EXCLUDED.canonical,
                 entity_type  = EXCLUDED.entity_type,
-                -- once reviewed/high, do not silently downgrade on a later low-conf re-add
+                -- once high-confidence, a later low-confidence re-add must not downgrade it
                 needs_review = entities.needs_review AND EXCLUDED.needs_review,
                 confidence   = CASE WHEN entities.confidence='high' THEN 'high'
                                     ELSE EXCLUDED.confidence END,
@@ -109,24 +109,23 @@ def load_alias_map(conn) -> dict:
 # ---------------------------------------------------------------------------
 def match_entities(text: str, alias_map: dict) -> list:
     """
-    The canonical entities named in `text`. Deterministic, case-insensitive, word-boundary.
+    Canonical entities named in `text`. Deterministic, case-insensitive, word-boundary.
 
-    LONGEST-ALIAS-FIRST so "himachal pradesh" wins over "himachal", and a matched span is
-    consumed so one mention is not double-counted. Returns a list of
-    {entity_id, entity_type, canonical, surface} in first-appearance order, de-duplicated by
-    entity_id.
+    Longest alias first, so "himachal pradesh" wins over "himachal", and a matched span is
+    consumed so one mention is not double-counted. Returns {entity_id, entity_type,
+    canonical, surface} in first-appearance order, de-duplicated by entity_id.
 
-    This is the SAME function for a record and for a query -- that identity is the fix.
+    Same function for a record and for a query — that shared path is the fix.
     """
     if not (text or "").strip() or not alias_map:
         return []
 
     norm = normalise(text)
-    # match on the normalised text with spaces around it, so word boundaries are simple.
+    # Pad with spaces so word boundaries are just space-delimited substring matches.
     padded = f" {norm} "
 
-    # longest aliases first -> specific beats generic; each is a phrase match on token
-    # boundaries (spaces), which normalise() has made uniform.
+    # Longest aliases first so specific beats generic; each is a phrase match on the
+    # space-delimited boundaries that normalise() produced.
     hits = []
     taken = [False] * len(padded)
     for alias in sorted(alias_map, key=len, reverse=True):
@@ -170,23 +169,19 @@ def load_synonym_map(conn) -> dict:
 def apply_synonyms(text: str, synonym_map: dict, protected: list | None = None) -> str:
     """
     Rewrite every context-synonym in `text` to its canonical representative, so "ongoing
-    hydro projects" and "under construction hydro projects" become the SAME string and
-    therefore embed identically.
+    hydro projects" and "under construction hydro projects" become the same string and embed
+    identically. Longest phrase first, word-boundary, case-insensitive; no LLM at query time.
 
-    Longest phrase first (so "under construction stage" wins over "under construction"),
-    word-boundary, case-insensitive. Deterministic; no LLM at query time.
-
-    `protected` — phrases that must NOT be rewritten (canonical ENTITY names already placed
-    in the text). Without this, a synonym like "hydroelectric"→"hydro" would rewrite the
-    inside of "Subansiri Lower Hydroelectric Project" and break the canonical entity form
-    the retriever and reranker rely on. Protected spans are swapped for placeholders during
-    the rewrite and restored after.
+    `protected` holds canonical entity names already placed in the text; they are shielded so
+    a synonym like "hydroelectric"->"hydro" cannot rewrite the inside of "Subansiri Lower
+    Hydroelectric Project". Protected spans become placeholders during the rewrite, restored
+    after.
     """
     if not text or not synonym_map:
         return text
     out = text
 
-    # shield the canonical entity names from the synonym regexes
+    # Shield the canonical entity names from the synonym regexes.
     placeholders = {}
     for i, phrase in enumerate(sorted(set(protected or []), key=len, reverse=True)):
         if not (phrase or "").strip():

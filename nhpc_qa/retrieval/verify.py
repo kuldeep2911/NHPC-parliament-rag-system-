@@ -1,30 +1,21 @@
 """
 Sigmoid relevance filter + batched LLM similarity verification.
 
-Pipeline position:  rerank -> [sigmoid_filter -> llm_verify] -> date-order -> display.
-This module is the two middle stages. It runs AFTER rerank and BEFORE the display-date
-ordering; it does not touch retrieval, RRF, doc_key, the halfvec SQL, or query-mode
-embedding.
+Pipeline position: rerank -> [sigmoid_filter -> llm_verify] -> date-order -> display. These
+are the two middle stages; they don't touch retrieval, RRF, doc_key, or the SQL.
 
-WHY TWO STAGES, AND WHY THE SIGMOID IS THE WEAK ONE.
+Two stages because the sigmoid is the weak one. Calibration showed the sigmoid of a genuine
+match and of boilerplate noise overlap completely (a real match scored 0.003; "details
+thereof" scored 0.9999 against 46 docs). So the sigmoid filter is only a cheap recall
+pre-filter that bounds how many candidates the LLM reads; the LLM verify pass does the real
+"is this the same question" judgement, which a scalar cannot.
 
-Calibration (scratchpad/calibrate2.py, on llama-nemotron-rerank-1b-v2) measured the
-reranker logit of every candidate across 12 labelled queries and proved the obvious design
-impossible: the sigmoid of a genuine match and the sigmoid of boilerplate noise OVERLAP
-COMPLETELY. The lowest real match scored 0.003; the phrase "details thereof" scored 0.9999
-against 46 documents. No single sigmoid value separates them.
+    sigmoid filter :  keep sigmoid >= SIMILARITY_THRESHOLD  (low on purpose)
+    llm verify     :  one batched call -> drop the ones it says are not the same question
 
-So the sigmoid filter is NOT the precision gate -- it is a cheap, permissive RECALL filter
-that only bounds how many candidates the LLM has to read. The LLM verify pass is what
-actually judges "is this the same question", which a scalar score cannot.
-
-    sigmoid filter :  keep sigmoid >= SIMILARITY_THRESHOLD  (default 0.05, low on purpose)
-    llm verify     :  ONE batched call -> drop the ones it says are not the same question
-
-RESILIENCE. The LLM is in the live path now, so it WILL sometimes be slow or down. When it
-fails, we return the sigmoid-filtered set UNVERIFIED with verification_unavailable=True --
-never an error, never an empty result caused by the model being unreachable. Retrieval must
-not depend on the LLM being up.
+Resilient: the LLM is in the live path, so on failure we return the sigmoid set unverified
+with verification_unavailable=True — never an error, never an empty result from the model
+being unreachable.
 """
 
 from __future__ import annotations
@@ -50,16 +41,13 @@ def sigmoid(x: float) -> float:
 
 def sigmoid_filter(reranked: list, threshold: float, safety_max: int):
     """
-    Attach `relevance` (sigmoid of the logit) to every candidate and keep those at or above
-    the threshold. Returns (kept, dropped_count).
+    Attach `relevance` (sigmoid of the logit) to every candidate and keep those >= threshold.
+    Returns (kept, dropped_count).
 
-    A candidate with a null logit (the reranker degraded to RRF order) is KEPT with
-    relevance=None: we cannot score it, and dropping it would turn a reranker outage into
-    silent data loss. It simply is not sigmoid-filtered.
-
-    `safety_max` bounds the survivors -- a guard against a degenerate query, not a relevance
-    cap. It applies to the already-sorted-by-relevance list, so it only ever trims the
-    weakest.
+    A candidate with a null logit (reranker degraded to RRF order) is kept with
+    relevance=None — we can't score it, and dropping it would turn a reranker outage into
+    silent data loss. `safety_max` bounds the survivors against a degenerate query; applied to
+    the relevance-sorted list, it only ever trims the weakest.
     """
     kept = []
     dropped = 0
@@ -78,21 +66,16 @@ def sigmoid_filter(reranked: list, threshold: float, safety_max: int):
 
 def plateau_guard(kept: list, cfg):
     """
-    Deterministic generic-query detection from the SHAPE of the reranked scores.
+    Deterministic generic-query detection from the shape of the reranked scores.
 
-    A real question peaks: one or a few strong matches, then a drop. A generic fragment
-    ("the reasons therefor", "details thereof") PLATEAUS: the stock phrase appears verbatim
-    in hundreds of past sub-questions, so dozens of candidates tie near sigmoid 1.0 and the
-    reranker cannot prefer any of them — there is nothing to prefer.
+    A real question peaks: a few strong matches, then a drop. A generic fragment ("the
+    reasons therefor") plateaus — the stock phrase appears in hundreds of sub-questions, so
+    dozens of candidates tie near sigmoid 1.0 with nothing to prefer. The guard requires both
+    a wide plateau (>= plateau_min_n above 0.9) and a saturated top (the plateau_min_n-th best
+    sigmoid still >= plateau_min_sigmoid); a real topic fails the second test as its tail
+    decays.
 
-    Measured on this corpus: "details thereof" produced 45 candidates above 0.9; "the
-    reasons therefor" kept 12 at >= 0.986. The strongest REAL frequent topic (Subansiri)
-    produced 10 above 0.9 WITH a clear leader. The guard therefore requires BOTH a wide
-    plateau (>= plateau_min_n above 0.9) AND a saturated top (the plateau_min_n-th best
-    sigmoid still >= plateau_min_sigmoid) — a real topic fails the second test because its
-    tail decays.
-
-    Returns (is_plateau, info). The caller decides what to do; this only measures.
+    Returns (is_plateau, info); this only measures, the caller decides.
     """
     if not getattr(cfg, "plateau_guard_enabled", False):
         return False, {}
@@ -188,12 +171,9 @@ def _parse_verdicts(raw: str, n: int):
     return out or None
 
 
-# The most candidates to judge in ONE call. A batch of 46 asks the model for a 46-element
-# JSON array, which overflowed the token budget and truncated mid-array -> unparseable ->
-# the whole batch fell back to "unverified, keep everything". Measured: exactly what let
-# "details thereof" through with 46 results. Batches of this size are a boilerplate query
-# anyway (a specific question does not have 46 genuine matches), but the verifier must
-# stay CORRECT for them, not just fail soft. So we chunk.
+# Max candidates per call. A larger batch asks for a huge JSON array that overflows the token
+# budget and truncates mid-array -> unparseable -> the whole batch falls back to "keep
+# everything" (which once let "details thereof" through with 46 results). So we chunk.
 _BATCH = 12
 
 
@@ -237,22 +217,18 @@ def _cache_store(conn, qhash, candidate, verdict, reason):
 
 def llm_verify(cfg, llm, query: str, candidates: list, conn=None):
     """
-    Batched verification, with a DETERMINISTIC per-(canonical-query) cache.
+    Batched verification with a deterministic per-canonical-query cache.
 
-      verified : the candidates the LLM judged similar, each annotated with verify_verdict
-                 and verify_reason. Order preserved (relevance order).
-      meta     : {"unavailable": bool, "ms": int, "checked": int, "kept": int,
-                  "reason": <why unavailable, if so>}
+      verified : candidates the LLM judged similar, annotated with verify_verdict/reason,
+                 in relevance order.
+      meta     : {"unavailable", "ms", "checked", "kept", "reason"}.
 
-    THE CACHE is what makes synonym-equivalent queries return the SAME final set: the LLM is
-    non-deterministic, so two queries canonicalised to the same string could otherwise get
-    different verdicts. Caching by (query_hash, sub_question_id) means the same canonical
-    query always reuses the same verdict -- and skips the API call. Only cache MISSES go to
-    the LLM.
+    The cache is what makes synonym-equivalent queries return the same final set: the LLM is
+    non-deterministic, so caching by (query_hash, sub_question_id) means the same canonical
+    query always reuses the same verdict and skips the call. Only cache misses hit the LLM.
 
-    Chunked at _BATCH so a large candidate set does not force one enormous JSON array. A
-    chunk that fails to parse after a retry makes THE WHOLE verification unavailable (fail
-    soft, flagged). NEVER raises.
+    Chunked so a large set doesn't force one enormous JSON array. A chunk that fails to parse
+    after a retry makes the whole verification unavailable (fail soft, flagged). Never raises.
     """
     t0 = time.time()
     if not candidates:

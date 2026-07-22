@@ -74,65 +74,44 @@ class Phase4Config(Phase3Config):
         _env_int("RERANK_CANDIDATE_POOL", _env_int("RETRIEVE_FINAL_TOP_K", 80)))
 
     # ─── SIGMOID RELEVANCE FILTER ────────────────────────────────────────────
-    # The reranker emits a RAW LOGIT (unbounded, NOT a probability). sigmoid(logit) rescales
-    # it to 0-1 for interpretability: sigmoid(0)=0.5, big positive -> ~1, big negative -> ~0.
-    #
-    # ⚠️ THIS IS A MONOTONIC RESCALING, NOT A CALIBRATED PROBABILITY. ⚠️ 0.9 does NOT mean
-    # "correct 90% of the time". And it does NOT separate matches from noise on its own --
-    # calibration (scratchpad/calibrate2.py) proved the two populations overlap completely:
-    # the lowest genuine match scored sigmoid 0.003, while boilerplate noise ("details
-    # thereof") scored 0.9999. No sigmoid value splits them.
-    #
-    # So the threshold is deliberately LOW and its job is RECALL, not precision: a cheap
-    # pre-filter that bounds how many candidates reach the LLM verify pass, which is what
-    # actually judges similarity. 0.05 keeps every genuine match we could retrieve except
-    # one rare-topic outlier at 0.003 (a threshold low enough to keep THAT admits nearly all
-    # noise), and the LLM removes the boilerplate the filter lets through.
-    #
-    # MODEL-SPECIFIC. Calibrated for llama-nemotron-rerank-1b-v2. A different reranker emits
-    # logits on a different scale -- re-run the calibration before trusting this value.
-    # 0.02, not 0.1: the 100-question harness found 9 real-topic queries (seismic
-    # monitoring, NHPC bonds, Kishanganga, Salal, Uri, Dulhasti...) returning ZERO because
-    # every candidate scored sigmoid < 0.1 — the reranker gives topically-right but
-    # differently-phrased matches low logits. The LLM verify is the precision gate; this
-    # filter exists only to bound its cost, so it must sit BELOW the genuine-match floor
-    # (calibrated minimum: 0.003).
+    # The reranker emits a raw logit; sigmoid(logit) rescales it to 0-1. This is a monotonic
+    # rescaling, NOT a calibrated probability, and it does not separate matches from noise on
+    # its own: calibration showed the two populations overlap (a real match scored 0.003, the
+    # boilerplate "details thereof" scored 0.9999). So the threshold is deliberately low — its
+    # only job is to bound how many candidates reach the LLM verify pass, which does the real
+    # precision. 0.02 sits below the genuine-match floor: at 0.1 the harness found 9 real
+    # topics (seismic, NHPC bonds, Kishanganga, Salal, Uri, Dulhasti...) returning ZERO
+    # because their reranker logits were low. Re-calibrate if the reranker model changes.
     similarity_threshold: float = field(
         default_factory=lambda: _env_float("SIMILARITY_THRESHOLD", 0.02))
 
-    # ─── PLATEAU GUARD — deterministic generic-query rejection (OFF) ─────────
-    # A generic fragment ("the reasons therefor") plateaus dozens of candidates near
-    # sigmoid 1.0. The guard detects that shape — but measured on this corpus it CANNOT be
-    # safely enabled: "hydro power potential in the country" is a REAL topic asked nearly
-    # verbatim ~20 times across sessions, and it saturates exactly like a fragment (23
-    # candidates, 12th-best sigmoid >= 0.97). Width+saturation does not separate "asked 20
-    # times" from "stock phrase". The LLM verify's fragment rule DOES (measured: rejected
-    # 29/29 for "the reasons therefor", kept 12/12 for hydro potential), so that is the
-    # production mechanism and this stays OFF — available for ops if the LLM is ever
-    # disabled and a deterministic backstop is preferred over recall.
+    # ─── PLATEAU GUARD — deterministic generic-query rejection (default OFF) ──
+    # A generic fragment ("the reasons therefor") plateaus dozens of candidates near sigmoid
+    # 1.0; this guard detects that shape. Kept OFF because it can't be enabled safely here: a
+    # real topic asked ~20 times ("hydro power potential in the country") saturates the same
+    # way, so shape alone can't tell them apart. The LLM verify's fragment rule does the job
+    # instead. Left available as a deterministic backstop if the LLM is ever disabled.
     plateau_guard_enabled: bool = field(
         default_factory=lambda: _env_bool("PLATEAU_GUARD_ENABLED", False))
     plateau_min_n: int = field(default_factory=lambda: _env_int("PLATEAU_MIN_N", 12))
     plateau_min_sigmoid: float = field(
         default_factory=lambda: _env_float("PLATEAU_MIN_SIGMOID", 0.97))
 
-    # A bound on pathological cases, NOT a relevance cap. The relevance decision is the
-    # sigmoid filter + the LLM; this only stops a degenerate query returning hundreds.
+    # A bound on pathological cases, not a relevance cap: stops a degenerate query returning
+    # hundreds. Relevance is decided by the sigmoid filter + the LLM.
     safety_max_results: int = field(
         default_factory=lambda: _env_int("SAFETY_MAX_RESULTS", 50))
 
     # ─── LLM SIMILARITY VERIFICATION ─────────────────────────────────────────
-    # The precision stage. ONE batched call judges every sigmoid-passing candidate for
-    # genuine similarity to the query, and non-matches are dropped. It puts an LLM call in
-    # the LIVE query path -- accepted deliberately for precision -- so it is ONE batched
-    # call, timed separately in the trace, and RESILIENT: if it fails, the sigmoid set is
-    # returned unverified with a "verification_unavailable" flag rather than an error.
+    # The precision stage: one batched call judges every sigmoid-passing candidate for genuine
+    # similarity and drops non-matches. This puts an LLM call in the live query path (accepted
+    # for precision), and it is resilient — on failure the sigmoid set is returned unverified
+    # with a "verification_unavailable" flag rather than an error.
     llm_verify_enabled: bool = field(
         default_factory=lambda: _env_bool("LLM_VERIFY_ENABLED", True))
 
-    # Run the LLM entity-discovery pass when a file is uploaded (offline, in the watcher --
-    # NOT the query path). Off by default: the seed lists + "Full (ABBR)" mining already
-    # cover most entities for free; the per-file LLM call is opt-in.
+    # Run LLM entity-discovery when a file is uploaded (offline, in the watcher — not the
+    # query path). Off by default: seed lists + "Full (ABBR)" mining cover most entities free.
     entities_llm_on_upload: bool = field(
         default_factory=lambda: _env_bool("ENTITIES_LLM_ON_UPLOAD", False))
     llm_verify_max_tokens: int = field(
@@ -146,20 +125,13 @@ class Phase4Config(Phase3Config):
     rrf_weight_keyword: float = field(default_factory=lambda: _env_float("RRF_W_KEYWORD", 0.7))
     rrf_weight_entity:  float = field(default_factory=lambda: _env_float("RRF_W_ENTITY", 0.5))
 
-    # ─── ANSWER-EMBEDDING EXPERIMENT (additive, OFF by default) ───────────────
-    # When TRUE, dense retrieval ALSO searches answer_group embeddings (migration 020): a
-    # record can be retrieved because its QUESTION matched OR its ANSWER matched. The answer
-    # hit is mapped back to the sub_question(s) linked to that answer_group and fused into the
-    # SAME candidate set as a THIRD retriever ("dense_answer"), deduped by doc_key. Everything
-    # downstream (rerank query-vs-question, sigmoid, LLM verify, date order) is unchanged.
-    #
-    # ⚠️ FALSE MUST REPRODUCE CURRENT BEHAVIOUR EXACTLY. ⚠️ When off, the answer retriever is
-    # never run and never imported into the hot path, and fusion sees only dense+entity.
-    #
-    # ANSWER_EMBED_WEIGHT is the RRF weight of the answer signal — deliberately MODEST by
-    # default (below dense's 1.0) so the answer signal boosts recall without letting shared
-    # answer boilerplate dominate the fused order. ANSWER_TOP_N bounds the answer groups
-    # scanned before expansion to sub-questions.
+    # ─── ANSWER-EMBEDDING RETRIEVAL (additive) ───────────────────────────────
+    # When on, dense retrieval also searches answer_group embeddings: a record can match on
+    # its QUESTION or its ANSWER. An answer hit maps back to its sub_question(s) and fuses in
+    # as a third retriever ("dense_answer"), deduped by doc_key; everything downstream is
+    # unchanged. When off, the answer retriever is never run or imported (fusion sees only
+    # dense+entity). ANSWER_EMBED_WEIGHT is its RRF weight, kept modest (below dense's 1.0) so
+    # the answer signal lifts recall without letting shared answer boilerplate dominate.
     use_answer_embeddings: bool = field(
         default_factory=lambda: _env_bool("USE_ANSWER_EMBEDDINGS", True))
     answer_top_n: int = field(
@@ -167,42 +139,27 @@ class Phase4Config(Phase3Config):
     answer_embed_weight: float = field(
         default_factory=lambda: _env_float("ANSWER_EMBED_WEIGHT", 0.5))
 
-    # --- WIDEN branch (CHANGE 3 + 4) -----------------------------------------
-    # RRF SCORES ARE NOT ON A 0-1 SCALE. With rrf_k=60, one retriever at rank 1
-    # contributes weight/(60+1): dense 0.0164, keyword 0.0115, entity 0.0082. Scores
-    # accumulate across BOTH retrievers and the several sub-questions of one document
-    # (we fuse per doc_key), so a strong document can exceed the naive
-    # "rank 1 in all three" figure of 0.036.
-    #
-    # MEASURED on this corpus (phase4/scripts/measure_rrf.py, 517 docs / 1914 parts):
-    #     strong + entity queries : top_score 0.027 .. 0.085   gap >= 0.0017
-    #     vague / nonsense queries: top_score 0.028 .. 0.032   gap  0.0004 .. 0.0054
-    #
-    # KEY FINDING: top_score does NOT separate good from bad -- the ranges OVERLAP
-    # (a vague query still has a nearest neighbour). The #1-#2 GAP is the discriminating
-    # signal: "details thereof" gaps at 0.0004, an order of magnitude below any strong
-    # query. So DELTA does the real work and TAU is set low, as a floor that only fires
-    # when retrieval is genuinely degenerate -- otherwise we would widen on every query
-    # and triple the latency for nothing.
+    # --- WIDEN branch --------------------------------------------------------
+    # RRF scores are not on a 0-1 scale, and top_score alone does not separate good queries
+    # from vague ones (a vague query still has a nearest neighbour). The #1-#2 gap is the
+    # discriminating signal — "details thereof" gaps an order of magnitude below any strong
+    # query — so DELTA does the real work and TAU is just a low floor. Widening fires only
+    # when retrieval is genuinely degenerate; otherwise we'd widen every query for nothing.
     widen_enabled: bool = field(default_factory=lambda: _env_bool("WIDEN_ENABLED", True))
     widen_tau:   float = field(default_factory=lambda: _env_float("WIDEN_TAU", 0.0150))
     widen_delta: float = field(default_factory=lambda: _env_float("WIDEN_DELTA", 0.0015))
-    # What WIDEN actually DOES (re-running node 2 unchanged would be pointless):
-    #   1. every retriever's top-N is multiplied by widen_top_n_factor, AND
-    #   2. the entity retriever relaxes from FILTER to BOOST-ONLY, AND
-    #   3. metadata filters (house/session/is_nhpc_relevant) are dropped.
-    # Capped at ONE retry.
+    # What a widened retry does (re-running unchanged would be pointless): (1) multiply every
+    # retriever's top-N by this factor, (2) relax the entity retriever from filter to
+    # boost-only, (3) drop metadata filters (house/session/is_nhpc_relevant). Capped at one.
     widen_top_n_factor: int = field(default_factory=lambda: _env_int("WIDEN_TOP_N_FACTOR", 3))
 
     # --- reranker ------------------------------------------------------------
     #   nvidia_nim_api    -> NVIDIA-hosted NIM (dev). Text leaves the network.
     #   nvidia_selfhosted -> on-prem NIM (server). Nothing leaves.
-    # DISPLAY ORDER of the final top-K. Retrieval is unaffected either way -- the same
-    # documents are shown; only their order changes.
-    #   date       (default) relevance selects the top-K, then reply_date DESC orders it,
-    #              so the officer reads the most RECENT of the RELEVANT replies first.
-    #              Undated documents sort last, marked "date unknown".
-    #   relevance  pure cross-encoder order (the pre-date behaviour).
+    # result_sort controls DISPLAY ORDER of the final top-K (retrieval is unaffected):
+    #   date       (default) relevance picks the top-K, then reply_date DESC orders it, so the
+    #              most recent relevant replies come first; undated sort last.
+    #   relevance  pure cross-encoder order.
     result_sort: str = field(default_factory=lambda: _env("RESULT_SORT", "date"))
 
     rerank_enabled: bool = field(default_factory=lambda: _env_bool("RERANK_ENABLED", True))
