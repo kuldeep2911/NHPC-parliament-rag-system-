@@ -230,6 +230,14 @@ class OllamaLLM(OpenAICompatTextMixin):
             return self.model if self.base_url else "deterministic"
         return "unknown"
 
+    def _key(self):
+        """
+        Optional bearer token for a remote OpenAI-compatible server (vLLM run with --api-key,
+        or a gateway). Returns None for a plain Ollama / unauthenticated vLLM, in which case
+        no Authorization header is sent. complete_text() picks this up automatically.
+        """
+        return (getattr(self.cfg, "llm_api_key", "") or "").strip() or None
+
     def complete_json(self, system: str, user: str, schema_hint=None) -> dict:
         if self.llm_is_deterministic:
             return self._det.complete_json(system, user, schema_hint)
@@ -241,15 +249,28 @@ class OllamaLLM(OpenAICompatTextMixin):
                          {"role": "user", "content": user}],
             "temperature": 0, "stream": False,
         }
-        # Ollama's server-side JSON mode. A self-hosted NVIDIA NIM (Nemotron Super 49B) may
-        # reject this field, so it is config-gated (NHPC_LLM_JSON_MODE=0 for a NIM). The
-        # extractor tolerates prose-wrapped JSON either way, so turning it off is safe.
-        if getattr(self.cfg, "llm_json_mode", True):
+        # Server-side JSON mode, spelled differently per server (NHPC_LLM_JSON_MODE):
+        #   ollama -> Ollama's own "format" field
+        #   openai -> the OpenAI-standard response_format, which vLLM and NIMs honour
+        #   off    -> neither; extract_json() recovers the object from prose
+        # Sending Ollama's field to vLLM is rejected, hence the explicit mode.
+        mode = getattr(self.cfg, "llm_json_mode", "ollama")
+        if mode is True:                      # tolerate an old boolean config object
+            mode = "ollama"
+        elif mode is False:
+            mode = "off"
+        if mode == "ollama":
             body["format"] = "json"
+        elif mode == "openai":
+            body["response_format"] = {"type": "json_object"}
+        headers = {"Content-Type": "application/json"}
+        key = self._key()
+        if key:                       # only when a remote server requires auth
+            headers["Authorization"] = f"Bearer {key}"
         req = urllib.request.Request(
             self.base_url.rstrip("/") + "/chat/completions",
             data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"})
+            headers=headers)
         with urllib.request.urlopen(req, timeout=self.cfg.llm_timeout_s) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return extract_json(data["choices"][0]["message"]["content"])

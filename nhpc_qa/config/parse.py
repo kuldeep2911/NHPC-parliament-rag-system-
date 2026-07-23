@@ -47,6 +47,22 @@ def _env_str(name: str, default: str) -> str:
     return v if v is not None and v.strip() else default
 
 
+def _normalise_json_mode(v: str) -> str:
+    """
+    Accept the JSON-mode names (ollama | openai | off) and the legacy booleans, so an
+    existing NHPC_LLM_JSON_MODE=1/0 keeps working. Anything unrecognised falls back to
+    "ollama" (the previous default) rather than failing at import time.
+    """
+    s = (v or "").strip().lower()
+    if s in {"ollama", "openai", "off"}:
+        return s
+    if s in {"1", "true", "yes", "on"}:
+        return "ollama"
+    if s in {"0", "false", "no"}:
+        return "off"
+    return "ollama"
+
+
 @dataclass
 class Config:
     # --- I/O ---
@@ -115,11 +131,22 @@ class Config:
     ollama_base_url: str = field(default_factory=lambda: _env_str("NHPC_OLLAMA_BASE_URL", "http://localhost:11434/v1"))
     llm_max_retries: int = 1  # one stricter retry on invalid JSON, then review
     llm_timeout_s: int = field(default_factory=lambda: int(_env_str("NHPC_LLM_TIMEOUT_S", "120")))
-    # Ollama-style server-side JSON mode ("format":"json"). Ollama honours it; a self-hosted
-    # NVIDIA NIM (e.g. Nemotron Super 49B) may reject the field. Default on for Ollama; set
-    # NHPC_LLM_JSON_MODE=0 when pointing NHPC_LLM_BASE_URL at a NIM. The extractor already
-    # tolerates prose-wrapped JSON, so turning it off never breaks parsing.
-    llm_json_mode: bool = field(default_factory=lambda: _env_bool("NHPC_LLM_JSON_MODE", True))
+    # Server-side JSON mode for the extraction call. Different servers spell it differently,
+    # so this is a MODE, not a boolean:
+    #   ollama  -> {"format": "json"}                        Ollama's own field
+    #   openai  -> {"response_format": {"type":"json_object"}}  vLLM / NIM / OpenAI standard
+    #   off     -> send neither; rely on extract_json() to recover JSON from prose
+    # Use "openai" when NHPC_OLLAMA_BASE_URL/NHPC_LLM_BASE_URL points at vLLM: it rejects
+    # Ollama's "format" field but honours response_format, giving server-guaranteed valid
+    # JSON. Parsing stays safe in every mode because extract_json() tolerates fences,
+    # <think> blocks and prose, and a bad span set is retried then falls back to rules.
+    # Back-compat: the old boolean values still work (1/true -> ollama, 0/false -> off).
+    llm_json_mode: str = field(
+        default_factory=lambda: _normalise_json_mode(_env_str("NHPC_LLM_JSON_MODE", "ollama")))
+    # Optional bearer token for a remote OpenAI-compatible LLM server (vLLM started with
+    # --api-key, or a NIM behind a gateway). Empty = no Authorization header, which is the
+    # normal case for Ollama / an unauthenticated vLLM on a trusted internal network.
+    llm_api_key: str = field(default_factory=lambda: _env_str("NHPC_LLM_API_KEY", ""))
     # Run the LLM as a SECOND-OPINION cross-check on every prose file: it counts
     # questions + distinct answers and we flag llm_crosscheck_disagree if it differs
     # from the deterministic split. The deterministic result is kept either way.

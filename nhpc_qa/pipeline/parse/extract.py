@@ -1146,7 +1146,19 @@ _PART_LABEL = re.compile(r"(?:(?<=\n)|(?<=\s)|^)\(?([a-h])\)[\s.]", re.I)
 
 # A Comment:/Answer:/Reply: marker that INTRODUCES an answer block. Anchored so we
 # find each one's position in the reply.
-_COMMENT_MARKER = re.compile(r"\b(comments?|answer|reply|उत्तर)\b\s*[:.\-]", re.I)
+# Answer-start markers for the deterministic split. Includes the legacy "Material for
+# reply:" (2014-17 layout) alongside the modern Comment:/Answer:/Reply:. Anchored so the
+# opening title line ("Material for Reply of Lok Sabha Question ...") is NOT matched — that
+# needs the ":" right after "reply", which the title never has.
+_COMMENT_MARKER = re.compile(
+    r"(material\s+for\s+(?:the\s+)?repl(?:y|ies)|comments?|answer|reply|उत्तर)\s*[:.\-]",
+    re.I)
+
+# The legacy document's opening TITLE line, stripped before splitting so it is never taken
+# as sub-question (a).  "Material for Reply of Lok Sabha starred Question Dy. No. 1999 ...
+# regarding POWER TARIFF."
+_LEGACY_TITLE = re.compile(
+    r"^\s*material\s+for\s+repl(?:y|ies)\s+of\b[^\n]*?\bquestion\b[^\n]*(?:\n|$)", re.I)
 
 # A sentence that starts a parliamentary sub-question when it has NO (x) label.
 # This is a fallback only: it is a closed vocabulary of English question openers and
@@ -1280,6 +1292,14 @@ def _split_subparts(text, meta):
     Returns a list of {label, question_text, answer_text} or None if there is no
     Comment: structure at all (single-answer / covering-letter docs handled upstream).
     """
+    # Drop the legacy opening title line ("Material for Reply of Lok Sabha Question Dy. No.
+    # ... regarding X"): it names the question, it is not a sub-question, and leaving it in
+    # makes the deterministic split capture it as part 'a'.
+    text = _LEGACY_TITLE.sub("", text, count=1)
+    # A "Questions:" section heading on its own line is a label, not a question — remove it
+    # so it does not become the first sub-part.
+    text = re.sub(r"^\s*questions?\s*[:.\-]\s*(?:\n|$)", "", text, count=1, flags=re.I)
+
     # strip the standard preamble ("...reply of Lok Sabha ... is as below:")
     m_head = re.search(r"is\s+as\s+below\s*:?\s*", text, re.I)
     body = text[m_head.end():] if m_head else text
@@ -1514,6 +1534,20 @@ _SPAN_SYSTEM = (
     "- Answers normally begin at a marker line: 'Comment:', 'Comments:', 'Answer:', "
     "'Reply:'. answer_lines MUST START on that marker line and run to the last line "
     "of that answer (include table/continuation lines that belong to it).\n"
+    "- OLDER replies (2014-2017) use a different layout: a 'Questions:' heading lists "
+    "the sub-questions, then a single 'Material for reply:' marker begins the answer "
+    "section. Treat 'Material for reply:' exactly like 'Comment:' — it is an answer "
+    "marker.\n"
+    "- ⚠️ THE OPENING TITLE LINE IS NOT A QUESTION. A first line like 'Material for "
+    "Reply of Lok Sabha starred Question Dy. No. 1999 for reply on 26.02.2015 regarding "
+    "POWER TARIFF' (any wording of the form 'Material for Reply of <House> ... Question "
+    "Dy. No. <n> ... regarding <topic>') is the document's HEADING. It names the question "
+    "and states its subject; it is NOT itself a sub-question and NOT an answer marker. "
+    "NEVER emit a sub-question whose question_lines cover that title line, and never "
+    "start answer_lines on it. The real sub-questions begin AFTER the 'Questions:' "
+    "heading.\n"
+    "- A bare 'Questions:' heading line is a section label, not a question itself; do "
+    "not emit a sub-question for it.\n"
     "- question_lines MUST NOT include any answer-marker line.\n"
     "\n"
     "EVERY ANSWER BLOCK MUST BE USED (hard requirement):\n"

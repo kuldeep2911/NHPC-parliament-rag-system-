@@ -14,6 +14,10 @@
 Original Data/
 PARLIAMENT*/
 organized/
+# raw-data archives (session dumps) — large and hold document content, never commit
+*.rar
+*.zip
+*.7z
 # trace output (JSONL run steps) holds document content — never commit
 _reports/
 **/_reports/

@@ -34,7 +34,26 @@ import re
 # The one lexical cue used here. It is not a question-shape rule: it marks where an
 # ANSWER begins, and is used only to validate/repair spans the model chose -- never
 # to decide how many questions exist or where they start.
-ANSWER_MARKER = re.compile(r"^\s*(comments?|answers?|reply|replies|उत्तर)\s*[:.\-]", re.I)
+#
+# Two document generations are covered:
+#   current  "Comment:" / "Answer:" / "Reply:" / "उत्तर:"
+#   legacy   "Material for reply:" / "Material for Reply of ..." (2014-17 sessions)
+# The legacy alternative is listed first so it wins over the bare "reply" alternative,
+# which would otherwise never match because it is not at the start of the line.
+ANSWER_MARKER = re.compile(
+    r"^\s*(material\s+for\s+(?:the\s+)?repl(?:y|ies)|"
+    r"comments?|answers?|repl(?:y|ies)|उत्तर)\s*[:.\-]", re.I)
+
+# Marks where the QUESTION block begins in legacy documents ("Questions:" / "Question:").
+# Used only to strip the heading from a sliced question; never to count questions.
+QUESTION_HEADING = re.compile(r"^\s*(questions?|प्रश्न)\s*[:.\-]", re.I)
+
+# The opening TITLE line of a legacy reply:
+#   "Material for Reply of Lok Sabha starred Question Dy. No. 1999 for reply on ... regarding X"
+# It names the question and its subject — it is neither a sub-question nor an answer marker.
+# The model sometimes emits it as sub-question (a); this pattern lets the validator drop it.
+DOC_TITLE_LINE = re.compile(
+    r"^\s*material\s+for\s+repl(?:y|ies)\s+of\b.*\bquestion\b", re.I)
 
 
 def number_lines(text: str) -> str:
@@ -54,8 +73,13 @@ def _marker_line(lines, lo, hi):
 
 
 def strip_marker(text: str) -> str:
-    """Remove a leading Comment:/Answer:/Reply: from a sliced answer."""
+    """Remove a leading Comment:/Answer:/Reply:/Material for reply: from a sliced answer."""
     return ANSWER_MARKER.sub("", text, count=1).strip()
+
+
+def strip_question_heading(text: str) -> str:
+    """Remove a leading 'Questions:' heading from a sliced legacy question."""
+    return QUESTION_HEADING.sub("", text, count=1).strip()
 
 
 def _answer_blocks(lines):
@@ -180,9 +204,20 @@ def verify_and_repair(obj, text):
                 continue
             ans_text = strip_marker(slice_lines(lines, as_))
 
-        q_text = slice_lines(lines, qs)
+        # Legacy documents put a bare "Questions:" heading above the first sub-question;
+        # it is a section label, not part of the question, so drop it.
+        q_text = strip_question_heading(slice_lines(lines, qs))
         if not q_text:
             errors.append(f"sub_question[{i}] question span is blank")
+            continue
+
+        # REPAIR: the model sometimes emits the document's TITLE line as sub-question (a)
+        # ("Material for Reply of Lok Sabha Question Dy. No. 1999 ... regarding POWER
+        # TARIFF"). That is the heading naming the question, not a question — drop it and
+        # keep the real sub-questions. Dropping (rather than erroring) is right because the
+        # rest of the span set is usually correct.
+        if DOC_TITLE_LINE.match(q_text):
+            repairs.append(f"dropped sub_question[{i}]: document title line, not a question")
             continue
 
         out.append({

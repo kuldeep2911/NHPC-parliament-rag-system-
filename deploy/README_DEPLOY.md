@@ -327,7 +327,79 @@ Parsing turns raw PDFs/scans into structured text + tables. Two backends:
   with the other images. Only worthwhile if Docling's table/scan output is not sharp enough
   for your corpus — otherwise skip them entirely.
 
-## Appendix D — the config knobs you might touch
+## Appendix D — running the LLM on a SEPARATE server (vLLM)
+
+Supported with no code change: the LLM client is OpenAI-compatible and reaches the model
+purely over HTTP, so pointing it at another machine is a config change.
+
+**On the LLM server** — bind vLLM to the network and note two values:
+
+```bash
+vllm serve nvidia/Llama-3_3-Nemotron-Super-49B-v1 \
+  --served-model-name nemotron-super-49b \
+  --host 0.0.0.0 --port 8000 --max-model-len 16384
+# optional: --api-key <KEY>
+sudo ufw allow from <BASE_SERVER_IP> to any port 8000 proto tcp   # vLLM has no auth by default
+```
+
+**On the base server** — in `.env`:
+
+```bash
+NHPC_LLM_BACKEND=ollama                              # OpenAI-compatible client; fine for vLLM
+NHPC_LLM_MODEL=nemotron-super-49b                    # = --served-model-name
+NHPC_OLLAMA_BASE_URL=http://<LLM_SERVER_IP>:8000/v1
+NHPC_LLM_JSON_MODE=openai                            # REQUIRED: vLLM rejects Ollama's "format"
+NHPC_LLM_TIMEOUT_S=300
+# NHPC_LLM_API_KEY=<KEY>                             # only if vLLM uses --api-key
+```
+
+Then start only the local model services (no Ollama here):
+
+```bash
+cd deploy/models && docker compose --profile cv up -d embed rerank ocr page-elements table-structure
+```
+
+**Verify before bootstrapping:**
+
+```bash
+curl -s http://<LLM_SERVER_IP>:8000/v1/models        # lists nemotron-super-49b
+curl -s http://<LLM_SERVER_IP>:8000/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"nemotron-super-49b","messages":[{"role":"user","content":"say OK"}],"stream":false}'
+```
+
+### Validate parsing on ~20 documents before the full run
+
+The extraction model returns **line numbers only** — the question/answer text is always sliced
+from the source document, never written by the model — so a bad response can never fabricate
+content, only mis-point. Still, confirm the span-validation error rate on real files first:
+
+```bash
+cd /opt/nhpc && . .venv/bin/activate
+python -m nhpc_qa.cli run --stages crawl,parse --limit 20      # parse 20 docs only
+```
+
+Then check how many needed review:
+
+```bash
+python - <<'EOF'
+import glob, json
+files = sorted(glob.glob("organized/*/*/*/parsed.json"))[:20]
+flagged = [f for f in files if json.load(open(f, encoding="utf-8")).get("needs_review")]
+print(f"parsed {len(files)} | needs_review {len(flagged)}")
+for f in flagged: print("  ", f)
+EOF
+```
+
+A few flagged documents are normal (they still load and stay searchable). A high rate means
+the model or prompt needs attention — inspect one flagged `parsed.json` and its
+`extraction_flags` before running the full corpus.
+
+**Two operational notes.** If the LLM server goes down, drafting and LLM-verify degrade
+gracefully: retrieval still returns results, flagged `verification_unavailable`. And question
+/answer text now crosses between the two servers on every draft/verify call — fine on a
+trusted internal LAN, but keep the firewall rule above in place.
+
+## Appendix E — the config knobs you might touch
 
 All in `.env`; restart the API after changing. Full list in `deploy/.env.production.example`.
 Most-tuned: `SIMILARITY_THRESHOLD` (0.02), `RETRIEVE_DENSE_TOP_N` (50), `DRAFT_CONTEXT_K`

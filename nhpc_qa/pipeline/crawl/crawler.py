@@ -120,6 +120,44 @@ HOUSE_MAP = {
     "assembly": "vidhan_sabha",
 }
 
+# ---------------------------------------------------------------------------
+# LEGACY LAYOUT (roughly 2014-2017 sessions).
+#
+# Those sessions have NO house folder. The house is encoded in the question
+# folder's own name instead, e.g.
+#     LSQ 1999, 26.02.15      -> lok_sabha,   diary 1999
+#     RSQ S 2524 19.03.15     -> rajya_sabha, diary S2524 (starred)
+#     ASQ 12-8-1197, 17.4.15  -> vidhan_sabha (assembly)
+#     AQ 125                  -> vidhan_sabha
+#     Assurance LSQ 1867 …    -> lok_sabha (an assurance follow-up)
+# The folders may sit directly under the session or under a wrapper such as
+# "Due up to FEB- MAR 15" / "Assembly Question" / "Assurance".
+#
+# QUESTION_PREFIX_HOUSE maps the leading token to a house so these folders can be
+# classified without a house directory. Order matters: longest/most specific first.
+# ---------------------------------------------------------------------------
+QUESTION_PREFIX_HOUSE = [
+    (re.compile(r"^\s*assurance\s*[-–:]?\s*ls\s*q", re.I), "lok_sabha"),
+    (re.compile(r"^\s*assurance\s*[-–:]?\s*rs\s*q", re.I), "rajya_sabha"),
+    (re.compile(r"^\s*ls\s*q", re.I), "lok_sabha"),      # LSQ, LS Q
+    (re.compile(r"^\s*rs\s*q", re.I), "rajya_sabha"),    # RSQ, RS Q
+    (re.compile(r"^\s*as\s*q", re.I), "vidhan_sabha"),   # ASQ  (assembly)
+    (re.compile(r"^\s*a\s*q\b", re.I), "vidhan_sabha"),  # AQ
+    (re.compile(r"^\s*usq", re.I), "lok_sabha"),         # unstarred LS question
+]
+
+
+def house_from_question_name(name: str):
+    """
+    House implied by a legacy question-folder name ("LSQ 1999, 26.02.15" -> lok_sabha),
+    or None when the name carries no house prefix. Used only where no house folder exists.
+    """
+    n = norm_ws(name)
+    for pat, house in QUESTION_PREFIX_HOUSE:
+        if pat.match(n):
+            return house
+    return None
+
 # Category / grouping folders that wrap question folders — pass through them.
 CATEGORY_FOLDERS = {
     "csr", "generation", "land", "safety", "tariff", "hydroprojects",
@@ -173,7 +211,16 @@ STATE_HINTS = {
 }
 
 # Chamber-code prefixes on question-folder names to strip for the canonical id.
-QID_PREFIX = re.compile(r"^(dy\.?|ls|rs|s|u|us|usq|sq)[\s\.\-]*", re.IGNORECASE)
+# Prefixes stripped from a question-folder name to leave the bare diary number.
+# LSQ/RSQ/ASQ/AQ come from the legacy 2014-17 layout and must be matched BEFORE the
+# shorter ls/rs/s/u forms, or "LSQ 1999" strips only "LS" and leaves "Q 1999".
+QID_PREFIX = re.compile(
+    r"^(assurance[\s\.\-]*)?(lsq|rsq|asq|usq|aq|sq|dy\.?|ls|rs|s|u|us)[\s\.\-]*",
+    re.IGNORECASE)
+# A trailing date in the folder name ("LSQ 1999, 26.02.15", "RSQ 1689 13.03.15").
+# It identifies the sitting, not the question, so it is dropped from the id.
+QID_TRAILING_DATE = re.compile(
+    r"[\s,]*\d{1,2}[\.\-/]\d{1,2}[\.\-/]\d{2,4}\s*$")
 REVISED_IN_NAME = re.compile(r"\(?\s*revised[^)]*\)?", re.IGNORECASE)
 
 
@@ -312,8 +359,21 @@ def canonical_qid(folder_name: str):
     if REVISED_IN_NAME.search(name):
         flags.add("possible_revised_duplicate")
 
-    # Ranges / multi-question, e.g. "1894 - 1908", "S2542,S2544"
-    if re.search(r"\d\s*[-,]\s*\d", name) and not re.match(r"^\d{1,2}[\s\.\-]\d{1,2}[\s\.\-]\d+$", name):
+    # Legacy folders carry the sitting date after the diary number ("LSQ 1999, 26.02.15").
+    # Strip it first: it is not part of the question id, and it would otherwise look like a
+    # multi-question range or a vidhan-style date id. Only when something precedes it, so a
+    # genuinely date-named folder is left alone.
+    _no_date = QID_TRAILING_DATE.sub("", name).strip(" ,.-")
+    if _no_date and _no_date != name and re.search(r"\d", _no_date):
+        name = _no_date
+
+    # Ranges / multi-question, e.g. "1894 - 1908", "S2542,S2544". A vidhan-style date id
+    # ("12-8-1197", with or without a legacy ASQ/AQ prefix) is NOT a range, so test the
+    # prefix-stripped form too before flagging.
+    _bare = QID_PREFIX.sub("", name).strip(" ()")
+    if (re.search(r"\d\s*[-,]\s*\d", name)
+            and not re.match(r"^\d{1,2}[\s\.\-]\d{1,2}[\s\.\-]\d+$", name)
+            and not re.match(r"^\d{1,2}[\s\.\-]+\d{1,2}[\s\.\-]+\d+$", _bare)):
         flags.add("multi_question")
 
     stripped = REVISED_IN_NAME.sub("", name).strip(" ()")
@@ -322,9 +382,15 @@ def canonical_qid(folder_name: str):
     # These are NOT simple numeric IDs: the leading numbers are a date/session
     # code, so a leading-number base would wrongly merge distinct questions
     # (14-8-1039 and 14-8-128 both -> "14"). Keep the whole token as the base.
-    date_id = re.match(r"^\s*\d{1,2}[\s\.\-]+\d{1,2}[\s\.\-]+\d+\s*$", stripped)
+    # Test the prefix-stripped form too, so a legacy "ASQ 12-8-1197" is recognised as the
+    # same kind of assembly date-id as a bare "12-8-1197".
+    _date_src = stripped
+    _pre = QID_PREFIX.sub("", stripped).strip(" ()")
+    if re.match(r"^\s*\d{1,2}[\s\.\-]+\d{1,2}[\s\.\-]+\d+\s*$", _pre):
+        _date_src = _pre
+    date_id = re.match(r"^\s*\d{1,2}[\s\.\-]+\d{1,2}[\s\.\-]+\d+\s*$", _date_src)
     if date_id:
-        norm = re.sub(r"[\s\.\-]+", "-", stripped.strip())
+        norm = re.sub(r"[\s\.\-]+", "-", _date_src.strip())
         qid = norm
         base = norm.lower()
         return qid, base, flags
@@ -915,9 +981,20 @@ def crawl(source_root: Path, out_root: Path, dry_run: bool) -> Report:
             })
             continue
 
+        # LEGACY SESSIONS (2014-2017) have no house folder: the house is in the question
+        # folder's name (LSQ/RSQ/ASQ/AQ). Harvest those first, wherever they sit under the
+        # session, so the loop below only has to deal with real house folders.
+        _harvest_prefixed_questions(session_dir, session_slug, sess_reason,
+                                    merged_group, report, out_root, source_root, dry_run)
+
         for house_dir in sorted(p for p in session_dir.iterdir() if p.is_dir()):
             house_slug, is_cat, is_orphan = normalize_house(house_dir.name)
             if is_orphan:
+                # Not a house folder — but it may be a legacy question folder, or a wrapper
+                # holding them ("Due up to FEB- MAR 15"). Those were already taken by
+                # _harvest_prefixed_questions; only report what it did not claim.
+                if _contains_prefixed_questions(house_dir):
+                    continue
                 report.orphans.append({
                     "type": "non_house_folder",
                     "path": os.path.relpath(house_dir, source_root),
@@ -961,6 +1038,73 @@ def crawl(source_root: Path, out_root: Path, dry_run: bool) -> Report:
             print(f"[LOCKED] skipped {out_key}: {e}", file=sys.stderr)
 
     return report
+
+
+_LEGACY_SCAN_DEPTH = 3          # session/<wrapper>/<wrapper>/<LSQ …> is the deepest seen
+
+
+def _contains_prefixed_questions(node: Path, depth: int = 0) -> bool:
+    """True if `node` is, or contains, a legacy house-prefixed question folder (LSQ/RSQ/…)."""
+    if depth > _LEGACY_SCAN_DEPTH:
+        return False
+    if house_from_question_name(node.name):
+        return True
+    try:
+        children = [p for p in node.iterdir() if p.is_dir()]
+    except OSError:
+        return False
+    return any(_contains_prefixed_questions(c, depth + 1) for c in children)
+
+
+def _harvest_prefixed_questions(node: Path, session_slug: str, sess_reason,
+                                merged_group, report, out_root, source_root, dry_run,
+                                depth: int = 0):
+    """
+    Walk a legacy session and process every house-prefixed question folder found.
+
+    The house comes from the folder NAME (LSQ/RSQ/ASQ/AQ) rather than a parent directory, so
+    these sessions need no house level at all. Wrapper folders ("Due up to …", "Assembly
+    Question", "Assurance") are passed through. A folder that both carries a prefix and is a
+    real question folder is processed and not descended into further.
+    """
+    if depth > _LEGACY_SCAN_DEPTH:
+        return
+    try:
+        children = sorted(p for p in node.iterdir() if p.is_dir())
+    except OSError:
+        return
+
+    for child in children:
+        house = house_from_question_name(child.name)
+        if house:
+            try:
+                if not is_question_folder(child):
+                    # a prefixed wrapper (e.g. "LSQ 10622" holding "REPLY FROM HR") —
+                    # descend so the real question folder inside is still picked up
+                    _harvest_prefixed_questions(child, session_slug, sess_reason,
+                                                merged_group, report, out_root,
+                                                source_root, dry_run, depth + 1)
+                    continue
+            except OSError:
+                continue
+            ctx = {"session": session_slug, "house": house, "state": None}
+            try:
+                process_question(child, ctx, merged_group, report,
+                                 out_root, source_root, dry_run)
+                report.review_reasons["legacy_prefixed_question_folder"] += 1
+            except Exception as e:      # noqa: BLE001 — one bad folder must not stop the crawl
+                report.orphans.append({
+                    "type": "legacy_question_failed",
+                    "path": os.path.relpath(child, source_root),
+                    "reason": f"{type(e).__name__}: {e}",
+                })
+            continue
+
+        # not prefixed itself: descend only if a prefixed question lives somewhere below
+        if normalize_house(child.name)[0] is None and _contains_prefixed_questions(child):
+            _harvest_prefixed_questions(child, session_slug, sess_reason,
+                                        merged_group, report, out_root, source_root,
+                                        dry_run, depth + 1)
 
 
 def _descend_for_questions(node: Path, ctx: dict, house_slug: str,
