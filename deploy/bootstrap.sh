@@ -27,6 +27,17 @@ die(){ printf "\033[1;31m  ✗ %s\033[0m\n" "$*" >&2; exit 1; }
 
 [[ -f .env ]] || die ".env not found at project root — copy deploy/.env.production.example to .env first"
 
+# Load .env into the environment so a MANUAL run (not just the systemd unit's
+# EnvironmentFile) picks up every setting — most importantly NHPC_LLM_GROUPING, without
+# which the parse silently falls back to the rule-based path and produces poor Q&A pairs.
+set -a; . ./.env; set +a
+
+# Guard the one flag whose absence quietly wrecks extraction quality.
+if [[ "${NHPC_LLM_GROUPING:-}" != "1" && "${NHPC_LLM_GROUPING:-}" != "true" ]]; then
+  die "NHPC_LLM_GROUPING is not enabled in .env. Parsing would use the rule-based fallback \
+(no LLM) and produce bad question/answer pairs. Set NHPC_LLM_GROUPING=1 and re-run."
+fi
+
 # ---------------------------------------------------------------------------
 say "1/8  Preflight — config + connectivity"
 $PY - <<'PYEOF' || die "preflight failed — fix .env and re-run"

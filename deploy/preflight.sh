@@ -28,11 +28,17 @@ chk "Embeddings NIM @ ${EMB}" "curl -sf ${EMB%/v1/*}/v1/health/ready"
 RRK="${RERANK_SELFHOSTED_URL:-http://localhost:8802/v1/ranking}"
 chk "Reranker NIM   @ ${RRK}" "curl -sf ${RRK%/v1/*}/v1/health/ready"
 
-# Ollama LLM + the model present
-OLL="${NHPC_OLLAMA_BASE_URL:-http://localhost:11434/v1}"
-chk "Ollama LLM     @ ${OLL}" "curl -sf ${OLL%/v1}/api/tags"
-chk "Ollama model '${NHPC_LLM_MODEL:-qwen3:14b}' loaded" \
-    "curl -sf ${OLL%/v1}/api/tags | grep -q \"${NHPC_LLM_MODEL:-qwen3:14b}\""
+# LLM server + the model present. Uses the OpenAI-standard /v1/models endpoint, which BOTH
+# Ollama AND vLLM expose — so this check is correct whether the LLM is a local Ollama or a
+# remote vLLM (NHPC_LLM_BASE_URL takes priority over NHPC_OLLAMA_BASE_URL, matching the code).
+LLM_BASE="${NHPC_LLM_BASE_URL:-${NHPC_OLLAMA_BASE_URL:-http://localhost:11434/v1}}"
+LLM_MODEL="${NHPC_LLM_MODEL:-qwen3:14b}"
+LLM_AUTH=""
+[ -n "${NHPC_LLM_API_KEY:-}" ] && LLM_AUTH="-H \"Authorization: Bearer ${NHPC_LLM_API_KEY}\""
+chk "LLM server     @ ${LLM_BASE}" \
+    "eval curl -sf ${LLM_AUTH} ${LLM_BASE%/}/models"
+chk "LLM model '${LLM_MODEL}' available" \
+    "eval curl -sf ${LLM_AUTH} ${LLM_BASE%/}/models | grep -q \"${LLM_MODEL}\""
 
 echo
 if [[ $fail -eq 0 ]]; then
